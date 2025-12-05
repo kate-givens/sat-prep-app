@@ -86,24 +86,56 @@ export const FirebaseProvider = ({ children }) => {
 
     const updateMastery = async (skillId, isCorrect, difficulty, timeTaken) => {
         if (!db || !userId || !userProfile) return { delta: 0 };
-    
+      
         const isMath = skillId.startsWith('M_');
         const targetTime = isMath ? 90 : 60;
+      
+        // Only Medium questions are used for fluency / time penalties
         const isFluencyCheck = difficulty === 'Medium';
         const isSlow = isFluencyCheck && timeTaken > targetTime;
-    
+      
         let delta = 0;
+      
         if (isCorrect) {
+          // Positive movement only
           if (difficulty === 'Hard') delta = 12;
           else if (difficulty === 'Medium') delta = 8;
-          else delta = 4; // Easy always gains 4%
-    
-          if (isSlow) delta = Math.floor(delta * 0.8);
+          else delta = 4;
+      
+          // Time penalty applies ONLY to Medium questions
+          if (isSlow && difficulty === 'Medium') {
+            delta = Math.floor(delta * 0.8); // e.g., 8 → 6
+          }
         } else {
-          if (difficulty === 'Hard') delta = -3;
-          else if (difficulty === 'Medium') delta = -4;
-          else delta = -6;
+          // ❗ No mastery loss on incorrect answers
+          // Students keep whatever mastery they've already earned.
+          delta = 0;
         }
+      
+        const currentMastery = userProfile.skillMastery[skillId] || 0;
+        const newMastery = Math.max(0, Math.min(100, currentMastery + delta));
+      
+        // Optimistic UI update
+        setUserProfile((prev) => ({
+          ...prev,
+          skillMastery: { ...prev.skillMastery, [skillId]: newMastery },
+        }));
+      
+        try {
+          await updateDoc(
+            doc(db, 'artifacts', appId, 'users', userId, 'profile', 'data'),
+            {
+              [`skillMastery.${skillId}`]: newMastery,
+              lastPracticed: new Date(),
+            }
+          );
+          return { delta, isSlow };
+        } catch (e) {
+          // If Firestore fails, we don't revert mastery here, but you could if you want.
+          return { delta: 0, isSlow: false };
+        }
+      };
+      
     
         const currentMastery = userProfile.skillMastery[skillId] || 0;
         const newMastery = Math.max(0, Math.min(100, currentMastery + delta));
