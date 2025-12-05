@@ -1,0 +1,156 @@
+import React, { useState } from 'react';
+import AdminPage from '../components/AdminPage';
+import { useFirebase } from '../context/FirebaseContext';
+import { BRAND_BLUE } from '../config/constants';
+
+const LoginScreen = () => {
+  const { loginAsStudent, loginAsDemo, loginWithEmail, signupWithEmail } = useFirebase();
+  const [mode, setMode] = useState('menu');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const handleAuth = async (isSignup) => {
+    setIsLoading(true);
+    setError(null);
+    try {
+      if (isSignup) await signupWithEmail(email, password);
+      else await loginWithEmail(email, password);
+    } catch (e) {
+      setError(e.message);
+      setIsLoading(false);
+    }
+  };
+
+  const handleDemo = async () => {
+    setIsLoading(true);
+    await loginAsDemo();
+  };
+
+  if (mode === 'admin') return <AdminPage setView={setMode} />;
+
+  if (mode === 'menu') {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+        <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+          <div
+            className="p-10 text-center"
+            style={{ backgroundColor: BRAND_BLUE }}
+          >
+            <div className="inline-block p-3 rounded-full bg-white/20 mb-4">
+              <svg
+                className="w-8 h-8 text-white"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke="currentColor"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"
+                />
+              </svg>
+            </div>
+            <h1 className="text-3xl font-light text-white tracking-wide font-['Montserrat']">
+              SAT<span className="font-semibold">PREP</span>.AI
+            </h1>
+            <p className="text-white/80 mt-2 text-sm font-light">
+              Adaptive Intelligence for Mastery
+            </p>
+          </div>
+          <div className="p-8 space-y-4 bg-white">
+            <button
+              onClick={() => setMode('login')}
+              className="w-full py-4 px-6 bg-white border border-[#1e82ff] text-[#1e82ff] font-medium rounded-xl hover:bg-[#1e82ff]/5 transition-all flex items-center justify-center"
+            >
+              Log In
+            </button>
+            <button
+              onClick={() => setMode('signup')}
+              className="w-full py-4 px-6 bg-[#1e82ff] text-white font-medium rounded-xl hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center justify-center"
+            >
+              Sign Up
+            </button>
+            <div className="relative py-2">
+              <div className="absolute inset-0 flex items-center">
+                <div className="w-full border-t border-gray-100"></div>
+              </div>
+              <div className="relative flex justify-center text-xs uppercase tracking-widest">
+                <span className="px-2 bg-white text-gray-400">Or</span>
+              </div>
+            </div>
+            <button
+              onClick={handleDemo}
+              disabled={isLoading}
+              className="w-full py-4 px-6 bg-gray-800 text-white font-medium rounded-xl hover:bg-gray-900 transition-all flex items-center justify-center"
+            >
+              <span className="mr-2">🚀</span> Try Demo Mode
+            </button>
+            <div className="text-center pt-2">
+              <button
+                onClick={() => setMode('admin')}
+                className="text-xs text-gray-300 hover:text-gray-500"
+              >
+                Admin Portal
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+      <div className="max-w-md w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-gray-100">
+        <div className="p-8 bg-white">
+          <h2 className="text-2xl font-bold text-gray-900 mb-6 text-center">
+            {mode === 'login' ? 'Welcome Back' : 'Create Account'}
+          </h2>
+          {error && (
+            <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4">
+              {error}
+            </div>
+          )}
+          <div className="space-y-4">
+            <input
+              type="email"
+              placeholder="Email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full p-4 border border-gray-200 rounded-xl focus:outline-none focus:border-[#1e82ff]"
+            />
+            <input
+              type="password"
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="w-full p-4 border border-gray-200 rounded-xl focus:outline-none focus:border-[#1e82ff]"
+            />
+            <button
+              onClick={() => handleAuth(mode === 'signup')}
+              disabled={isLoading}
+              className="w-full py-4 bg-[#1e82ff] text-white font-medium rounded-xl hover:shadow-lg transition-all flex items-center justify-center"
+            >
+              {isLoading
+                ? 'Processing...'
+                : mode === 'login'
+                ? 'Log In'
+                : 'Sign Up'}
+            </button>
+            <button
+              onClick={() => setMode('menu')}
+              className="w-full text-gray-400 text-sm hover:text-gray-600"
+            >
+              Back
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default LoginScreen;
