@@ -137,25 +137,34 @@ export const FirebaseProvider = ({ children }) => {
       };
       
     
-        const currentMastery = userProfile.skillMastery[skillId] || 0;
+      const updateSkillMastery = async (skillId, delta, isSlow) => {
+        const currentMastery =
+          (userProfile && userProfile.skillMastery && userProfile.skillMastery[skillId]) || 0;
+      
         const newMastery = Math.max(0, Math.min(100, currentMastery + delta));
-    
+      
         // Optimistic UI update
         setUserProfile((prev) => ({
           ...prev,
           skillMastery: { ...prev.skillMastery, [skillId]: newMastery },
         }));
-
+      
         try {
-          await updateDoc(doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data'), {
+          await updateDoc(
+            doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data'),
+            {
               [`skillMastery.${skillId}`]: newMastery,
-              lastPracticed: new Date()
-          });
+              lastPracticed: new Date(),
+            }
+          );
           return { delta, isSlow };
         } catch (e) {
+          // optional: revert optimistic update here if you want
+          console.error('Error updating mastery:', e);
           return { delta: 0, isSlow: false };
         }
-    };
+      };
+      
 
     const completeDailyGoal = async (scorePercentage) => {
         if (!db || !userId) return;
