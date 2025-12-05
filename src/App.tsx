@@ -340,20 +340,38 @@ const generateSATQuestion = async (skillId, difficulty, db) => {
     let generatedText = data.candidates?.[0]?.content?.parts?.[0]?.text;
     if (!generatedText) throw new Error('No text generated from API');
 
-    // Clean JSON
-    generatedText = generatedText
-      .replace(/```json/g, '')
-      .replace(/```/g, '')
-      .trim();
+   // Clean JSON (strip ```json fences etc.)
+generatedText = generatedText
+.replace(/```json/g, '')
+.replace(/```/g, '')
+.trim();
 
-    let parsedData;
-    try {
-      parsedData = JSON.parse(generatedText);
-    } catch (e) {
-      // Attempt to fix common JSON escaping errors
-      const fixedText = generatedText.replace(/\\(?![/u"bfnrt\\])/g, '\\\\');
-      parsedData = JSON.parse(fixedText);
-    }
+// Small helper to safely attempt parse
+const tryParse = (text) => {
+try {
+  return JSON.parse(text);
+} catch {
+  return null;
+}
+};
+
+let parsedData = tryParse(generatedText);
+
+if (!parsedData) {
+// Repair obvious bad escapes:
+// 1) Any backslash NOT followed by a valid JSON escape char -> double it
+// 2) Guard against invalid \u sequences (like \up, \u_ etc.)
+const repaired = generatedText
+  .replace(/\\(?!["\\/bfnrtu])/g, '\\\\')
+  .replace(/\\u(?![0-9a-fA-F]{4})/g, '\\\\u');
+
+parsedData = tryParse(repaired);
+}
+
+if (!parsedData) {
+console.error('Gemini JSON parse failed. Raw text:', generatedText);
+throw new Error('Failed to parse AI JSON from model');
+}
 
     // --- 5. VALIDATION GUARD ---
     if (!parsedData.options || !Array.isArray(parsedData.options)) {
