@@ -251,7 +251,16 @@ RULES:
     return {
       ...parsedData,
       correctAnswer: String.fromCharCode(65 + correctIndex),
+      // metadata for questionBank
+      skillId,
+      difficulty,
+      seedMeta: {
+        seedId: effectiveSeed.seedId || null,
+        subtype: effectiveSeed.subtype || null,
+        itemStructureType: effectiveSeed.itemStructureType || null,
+      },
     };
+    
   } catch (error) {
     console.error('AI Generation Error:', error);
     return {
