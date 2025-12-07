@@ -2,6 +2,7 @@
 import { collection, addDoc } from 'firebase/firestore';
 import { APP_ID } from '../config/constants';
 import { generateSATQuestion } from './aiEngine';
+import { collection, addDoc, query, where, limit, getDocs, doc, updateDoc } from 'firebase/firestore';
 
 export const generateQuestionsToBank = async (
   db,
@@ -12,7 +13,45 @@ export const generateQuestionsToBank = async (
   if (!db || !skill?.skillId) {
     throw new Error('DB or skill not provided');
   }
+  const questionsRef = collection(
+    db,
+    'artifacts',
+    APP_ID,
+    'public',
+    'data',
+    'questionBank'
+  );
 
+  const q = query(
+    questionsRef,
+    where('skillId', '==', skillId),
+    where('difficulty', '==', difficulty),
+    where('status', '==', 'draft'),
+    limit(count)
+  );
+
+  const snap = await getDocs(q);
+  if (snap.empty) return [];
+
+  return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+};
+
+// Approve or reject a question
+export const setQuestionStatus = async (db, questionId, status) => {
+  if (!db) return;
+
+  const questionRef = doc(
+    db,
+    'artifacts',
+    APP_ID,
+    'public',
+    'data',
+    'questionBank',
+    questionId
+  );
+
+  await updateDoc(questionRef, { status });
+};
   const questionsRef = collection(
     db,
     'artifacts',
