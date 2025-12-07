@@ -2,6 +2,8 @@ import React, { useState } from 'react';
 import { addDoc, collection } from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
+import { generateQuestionsToBank } from '../services/questionBankService';
+
 
 const AdminPage = ({ setView }) => {
   const { db, SKILLS } = useFirebase();
