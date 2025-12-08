@@ -41,6 +41,13 @@ const DashboardPage = () => {
         highestScore = priorityScore;
         selected = skill;
       }
+
+      const pickDifficultyForMastery = (mastery) => {
+        if (mastery < 25) return 'Easy';
+        if (mastery < 75) return 'Medium';
+        return 'Hard';
+      };
+      
     });
 
     return selected;
@@ -75,22 +82,22 @@ const DashboardPage = () => {
 
   const startPractice = async (skill) => {
     if (!skill || !db) return;
-
+  
     setActivePracticeSkill(skill);
     setDailyError('');
     setIsLoadingDaily(true);
-
+  
     const isDaily =
       dailySkill &&
       skill.skillId === dailySkill.skillId &&
       !isDailyComplete;
-
+  
     setIsDailyPracticeMode(isDaily);
-
+  
     try {
-      const skillMastery = userProfile.skillMastery[skill.skillId] ?? 0;
-      const targetDifficulty = pickDifficultyForMastery(skillMastery);
-
+      const mastery = userProfile.skillMastery[skill.skillId] ?? 0;
+      const targetDifficulty = pickDifficultyForMastery(mastery);
+  
       const bankRef = collection(
         db,
         'artifacts',
@@ -99,44 +106,47 @@ const DashboardPage = () => {
         'data',
         'questionBank'
       );
-
-      // For now: always filter by skillId, *try* to match difficulty, ignore status
-      const qBank = query(
+  
+      // 1) Ideal: same skill + difficulty + approved
+      const qExact = query(
         bankRef,
         where('skillId', '==', skill.skillId),
         where('difficulty', '==', targetDifficulty),
+        where('status', '==', 'approved'),
         limit(5)
       );
-
-      const snapshot = await getDocs(qBank);
-      const questions = snapshot.docs.map((doc) => ({
+  
+      let snapshot = await getDocs(qExact);
+      let questions = snapshot.docs.map((doc) => ({
         id: doc.id,
         ...doc.data(),
       }));
-
+  
+      // 2) Fallback: same skill, any difficulty, but still approved
       if (!questions.length) {
-        // Fallback: any 5 questions for that skill, any difficulty
-        const qAny = query(
+        const qAnyDiff = query(
           bankRef,
           where('skillId', '==', skill.skillId),
+          where('status', '==', 'approved'),
           limit(5)
         );
-        const snapAny = await getDocs(qAny);
-        const anyQuestions = snapAny.docs.map((doc) => ({
+        snapshot = await getDocs(qAnyDiff);
+        questions = snapshot.docs.map((doc) => ({
           id: doc.id,
           ...doc.data(),
         }));
-
-        if (!anyQuestions.length) {
-          setPracticeQuestions(null);
-          setDailyError(
-            `No question bank items found for skill ${skill.skillId}.`
-          );
-        } else {
-          setPracticeQuestions(anyQuestions);
-        }
+      }
+  
+      if (!questions.length) {
+        // Nothing approved yet for this skill
+        setPracticeQuestions(null);
+        setDailyError(
+          `No approved question bank items found for skill ${skill.skillId}.`
+        );
       } else {
-        setPracticeQuestions(questions);
+        // Optional: shuffle for variety
+        const shuffled = [...questions].sort(() => Math.random() - 0.5);
+        setPracticeQuestions(shuffled);
       }
     } catch (err) {
       console.error('Error loading bank questions:', err);
@@ -147,7 +157,7 @@ const DashboardPage = () => {
       setView('practice');
     }
   };
-
+  
   if (!userProfile) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">

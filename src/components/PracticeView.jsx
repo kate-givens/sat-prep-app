@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import MathText from './MathText';
+import { addDoc, collection } from 'firebase/firestore';
+import { useFirebase } from '../context/FirebaseContext.jsx';
+import { APP_ID } from '../config/constants.js';
+
 
 const PracticeView = ({
   activeSkill,
@@ -25,6 +29,43 @@ const PracticeView = ({
   const [isSlow, setIsSlow] = useState(false);
   const [questionList, setQuestionList] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+
+  const logQuestionResult = async ({
+    questionId,
+    skillId,
+    difficulty,
+    subtype,
+    isCorrect,
+    timeTakenSeconds,
+  }) => {
+    if (!db || !userId) return;
+
+    try {
+      await addDoc(
+        collection(
+          db,
+          'artifacts',
+          APP_ID,
+          'users',
+          userId,
+          'questionResults'
+        ),
+        {
+          userId,
+          questionId,
+          skillId,
+          difficulty,
+          subtype: subtype || null,
+          isCorrect,
+          timeTakenSeconds,
+          answeredAt: new Date(),
+        }
+      );
+    } catch (err) {
+      console.error('Error logging question result:', err);
+    }
+  };
+
 
   // Initialize from bank questions
   useEffect(() => {
@@ -79,7 +120,18 @@ const PracticeView = ({
       explanation: currentQuestion.explanation,
       correct: isCorrect,
     });
+
+    // 🔹 NEW: log result to Firestore
+    await logQuestionResult({
+      questionId: currentQuestion.id || null,
+      skillId: currentQuestion.skillId || activeSkill.skillId,
+      difficulty: practiceLevel,
+      subtype: currentQuestion.subtype || null,
+      isCorrect,
+      timeTakenSeconds: duration,
+    });
   };
+
 
   const handleNextQuestion = async () => {
     if (questionNumber >= totalQuestions) {
