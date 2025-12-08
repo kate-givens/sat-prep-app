@@ -16,13 +16,9 @@ import { generateSATQuestion } from './aiEngine';
 // --- simple helper ---
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-// Free-tier safety: stay UNDER 5 requests per minute.
-// We'll aim for 4 calls per minute.
-const MAX_CALLS_PER_MINUTE = 4;
-const WINDOW_MS = 60_000;
-
 /**
  * Generate N questions for a given skill + difficulty and store them in questionBank
+ * Uses a fixed delay between AI calls to avoid 429 rate-limit errors.
  */
 export const generateQuestionsToBank = async (
   db,
@@ -45,35 +41,12 @@ export const generateQuestionsToBank = async (
 
   const results = [];
 
-  // --- rate-limiter state ---
-  let windowStart = Date.now();
-  let callsInWindow = 0;
+  // ONE AI CALL every 20 seconds → ~3 calls/minute (under 5 RPM free limit)
+  const PER_CALL_DELAY_MS = 20_000;
 
   for (let i = 0; i < count; i++) {
-    // Check if we're still in the same 60s window
-    const now = Date.now();
-    const elapsed = now - windowStart;
-
-    if (elapsed >= WINDOW_MS) {
-      // new window
-      windowStart = now;
-      callsInWindow = 0;
-    }
-
-    if (callsInWindow >= MAX_CALLS_PER_MINUTE) {
-      // We've hit our safe max for this minute; wait until the window resets
-      const waitMs = WINDOW_MS - elapsed;
-      console.log(
-        `Rate limit guard: waiting ${Math.ceil(waitMs / 1000)}s before next AI call`
-      );
-      await sleep(waitMs);
-      windowStart = Date.now();
-      callsInWindow = 0;
-    }
-
-    // === ONE AI CALL (likely Gemini) ===
+    // === ONE AI CALL (Gemini via generateSATQuestion) ===
     const q = await generateSATQuestion(skill.skillId, difficulty, db);
-    callsInWindow += 1;
 
     const seedMeta = q.seedMeta || {};
 
@@ -81,19 +54,15 @@ export const generateQuestionsToBank = async (
       skillId: skill.skillId,
       domainId: skill.domainId || null,
       difficulty,
-
-      // basic structural tags (refine later if you want)
       subtype: seedMeta.subtype || 'generic',
       representation: 'verbal',
       itemStructureType:
         seedMeta.itemStructureType || `${skill.name} (${skill.skillId})`,
-
       passageText: q.passageText || '',
       questionText: q.questionText || '',
       options: q.options || [],
       correctAnswer: q.correctAnswer || 'A',
       explanation: q.explanation || '',
-
       status: 'draft',
       source: 'ai_v1',
       seedId: seedMeta.seedId || null,
@@ -102,6 +71,11 @@ export const generateQuestionsToBank = async (
 
     const docRef = await addDoc(questionsRef, docData);
     results.push({ id: docRef.id, ...docData });
+
+    // 👇 wait before the next AI call so we don't trigger 429
+    if (i < count - 1) {
+      await sleep(PER_CALL_DELAY_MS);
+    }
   }
 
   return results;
