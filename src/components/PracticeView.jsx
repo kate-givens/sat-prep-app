@@ -9,9 +9,10 @@ const PracticeView = ({
   updateMastery,
   completeDailyGoal,
   isDailySession,
-  initialQuestions, 
   db,
+  initialQuestions, // new: pre-fetched bank questions (Daily 5)
 }) => {
+  // ---------- STATE HOOKS (ALWAYS TOP-LEVEL, NO CONDITIONS) ----------
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [userAnswer, setUserAnswer] = useState(null);
@@ -24,12 +25,15 @@ const PracticeView = ({
   const [startTime, setStartTime] = useState(Date.now());
   const [timeTaken, setTimeTaken] = useState(0);
   const [isSlow, setIsSlow] = useState(false);
+
+  // NEW: question list for bank-based mode
   const [questionList, setQuestionList] = useState(initialQuestions || []);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-
+  // ---------- AI FALLBACK LOADER (OLD BEHAVIOR) ----------
   const loadQuestion = useCallback(async () => {
     if (!activeSkill) return;
+
     setIsGenerating(true);
     setCurrentQuestion(null);
     setFeedback(null);
@@ -42,6 +46,7 @@ const PracticeView = ({
       practiceLevel,
       db
     );
+
     setCurrentQuestion({
       skillId: activeSkill.skillId,
       difficulty: practiceLevel,
@@ -51,6 +56,7 @@ const PracticeView = ({
     setIsGenerating(false);
   }, [activeSkill, practiceLevel, db]);
 
+  // ---------- INITIALIZE: BANK MODE VS AI MODE ----------
   useEffect(() => {
     const init = async () => {
       // If we were given questions (Daily 5), use them
@@ -66,20 +72,21 @@ const PracticeView = ({
         setIsGenerating(false);
         return;
       }
-  
+
       // Otherwise, fall back to AI generation (old behavior)
       if (activeSkill) {
         await loadQuestion();
       }
     };
-  
+
     init();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialQuestions, activeSkill, practiceLevel]);
-  
 
+  // ---------- ANSWER SUBMISSION ----------
   const handleSubmitAnswer = async (answer) => {
     if (isGenerating || userAnswer) return;
+    if (!currentQuestion) return;
 
     const now = Date.now();
     const duration = (now - startTime) / 1000;
@@ -106,29 +113,31 @@ const PracticeView = ({
     });
   };
 
+  // ---------- NEXT QUESTION / END OF SET ----------
   const handleNextQuestion = async () => {
     const usingBank = questionList && questionList.length > 0;
-    const total = usingBank ? questionList.length : 5; // Daily 5 target
-  
+    const total = usingBank ? questionList.length : 5; // Daily 5 target / default
+
     if (questionNumber >= total) {
       setSessionComplete(true);
-  
+
       if (isDailySession) {
         const finalScore = (correctCount / total) * 100;
         await completeDailyGoal(finalScore);
       }
-  
+
       return;
     }
-  
+
     setQuestionNumber((prev) => prev + 1);
     setUserAnswer(null);
     setFeedback(null);
     setPointsDelta(0);
     setIsSlow(false);
-  
+
     if (usingBank) {
       const nextIndex = currentIndex + 1;
+
       if (nextIndex < questionList.length) {
         setCurrentIndex(nextIndex);
         setCurrentQuestion({
@@ -147,13 +156,15 @@ const PracticeView = ({
       }
     } else {
       // Old AI mode
-      loadQuestion();
+      await loadQuestion();
     }
   };
-  
 
+  // ---------- SESSION COMPLETE SCREEN ----------
   if (sessionComplete) {
-    const passed = correctCount >= 3;
+    const total = questionList && questionList.length > 0 ? questionList.length : 5;
+    const passed = correctCount >= Math.ceil(total * 0.6); // 60%
+
     return (
       <div className="flex items-center justify-center min-h-[600px] animate-fade-in-up">
         <div className="bg-white p-12 rounded-3xl shadow-xl border border-gray-100 text-center max-w-md w-full">
@@ -168,13 +179,13 @@ const PracticeView = ({
                 passed ? 'text-green-600' : 'text-orange-500'
               }`}
             >
-              {correctCount}/5
+              {correctCount}/{total}
             </span>{' '}
             correct.
           </p>
           {isDailySession && !passed && (
             <div className="bg-orange-50 text-orange-800 p-4 rounded-xl text-sm mb-8">
-              You need 60% (3/5) to unlock the rest of the skills.
+              You need 60% ({Math.ceil(total * 0.6)}/{total}) to unlock the rest of the skills.
             </div>
           )}
           <div className="space-y-3">
@@ -208,6 +219,7 @@ const PracticeView = ({
     );
   }
 
+  // ---------- MAIN QUESTION UI ----------
   return (
     <div className="max-w-7xl mx-auto p-6 animate-fade-in-up">
       <div className="mb-6 flex justify-between items-center">
@@ -218,8 +230,7 @@ const PracticeView = ({
           Exit
         </button>
         <div className="text-xs font-bold text-[#1e82ff] bg-blue-50 px-3 py-1 rounded-full uppercase tracking-widest">
-          {isDailySession ? 'Daily Goal' : 'Practice Set'} • {questionNumber} /
-          5
+          {isDailySession ? 'Daily Goal' : 'Practice Set'} • {questionNumber} / 5
         </div>
       </div>
 
