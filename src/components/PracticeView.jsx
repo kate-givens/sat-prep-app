@@ -9,6 +9,7 @@ const PracticeView = ({
   updateMastery,
   completeDailyGoal,
   isDailySession,
+  initialQuestions, 
   db,
 }) => {
   const [currentQuestion, setCurrentQuestion] = useState(null);
@@ -23,6 +24,9 @@ const PracticeView = ({
   const [startTime, setStartTime] = useState(Date.now());
   const [timeTaken, setTimeTaken] = useState(0);
   const [isSlow, setIsSlow] = useState(false);
+  const [questionList, setQuestionList] = useState(initialQuestions || []);
+  const [currentIndex, setCurrentIndex] = useState(0);
+
 
   const loadQuestion = useCallback(async () => {
     if (!activeSkill) return;
@@ -48,8 +52,31 @@ const PracticeView = ({
   }, [activeSkill, practiceLevel, db]);
 
   useEffect(() => {
-    loadQuestion();
-  }, []);
+    const init = async () => {
+      // If we were given questions (Daily 5), use them
+      if (initialQuestions && initialQuestions.length > 0 && activeSkill) {
+        setQuestionList(initialQuestions);
+        setCurrentIndex(0);
+        setCurrentQuestion({
+          skillId: activeSkill.skillId,
+          difficulty: practiceLevel,
+          ...initialQuestions[0],
+        });
+        setStartTime(Date.now());
+        setIsGenerating(false);
+        return;
+      }
+  
+      // Otherwise, fall back to AI generation (old behavior)
+      if (activeSkill) {
+        await loadQuestion();
+      }
+    };
+  
+    init();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialQuestions, activeSkill, practiceLevel]);
+  
 
   const handleSubmitAnswer = async (answer) => {
     if (isGenerating || userAnswer) return;
@@ -80,17 +107,50 @@ const PracticeView = ({
   };
 
   const handleNextQuestion = async () => {
-    if (questionNumber >= 5) {
+    const usingBank = questionList && questionList.length > 0;
+    const total = usingBank ? questionList.length : 5; // Daily 5 target
+  
+    if (questionNumber >= total) {
       setSessionComplete(true);
+  
       if (isDailySession) {
-        const finalScore = (correctCount / 5) * 100;
+        const finalScore = (correctCount / total) * 100;
         await completeDailyGoal(finalScore);
       }
+  
+      return;
+    }
+  
+    setQuestionNumber((prev) => prev + 1);
+    setUserAnswer(null);
+    setFeedback(null);
+    setPointsDelta(0);
+    setIsSlow(false);
+  
+    if (usingBank) {
+      const nextIndex = currentIndex + 1;
+      if (nextIndex < questionList.length) {
+        setCurrentIndex(nextIndex);
+        setCurrentQuestion({
+          skillId: activeSkill.skillId,
+          difficulty: practiceLevel,
+          ...questionList[nextIndex],
+        });
+        setStartTime(Date.now());
+      } else {
+        // Just in case: end early if we run out
+        setSessionComplete(true);
+        if (isDailySession) {
+          const finalScore = (correctCount / questionList.length) * 100;
+          await completeDailyGoal(finalScore);
+        }
+      }
     } else {
-      setQuestionNumber((prev) => prev + 1);
+      // Old AI mode
       loadQuestion();
     }
   };
+  
 
   if (sessionComplete) {
     const passed = correctCount >= 3;

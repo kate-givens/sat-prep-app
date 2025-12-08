@@ -2,6 +2,8 @@ import React, { useState, useMemo } from 'react';
 import OverviewView from '../components/OverviewView.jsx'; // Ensure .jsx extension
 import PracticeView from '../components/PracticeView.jsx'; // Ensure .jsx extension
 import { useFirebase } from '../context/FirebaseContext.jsx'; // Ensure .jsx extension
+import { fetchPracticeQuestions } from '../services/questionBankService.js';
+
 
 // Helper
 const calculatePriorityScore = (mastery, weight) => (100 - mastery) * weight;
@@ -28,6 +30,11 @@ const DashboardPage = () => {
     if (!userProfile?.skillMastery || !SKILLS) return null; // Added !SKILLS check
     let highest = -1,
       selected = null;
+
+  const [dailyQuestions, setDailyQuestions] = useState(null);
+  const [isLoadingDaily, setIsLoadingDaily] = useState(false);
+  const [dailyError, setDailyError] = useState('');
+      
     
     // 2. Changed ALL_SKILLS to SKILLS
     SKILLS.forEach((skill) => {
@@ -51,14 +58,44 @@ const DashboardPage = () => {
     );
   }, [userProfile]);
 
-  const startPractice = (skill) => {
-    setActivePracticeSkill(skill);
-    setIsDailyPracticeMode(
-      skill.skillId === dailySkill?.skillId && !isDailyComplete
-    );
-    setView('practice');
+  const startPractice = async (skill) => {
+    // Is this the Daily Priority skill, and is the day not yet complete?
+    const isDailySkill = dailySkill && skill.skillId === dailySkill.skillId && !isDailyComplete;
+  
+    if (isDailySkill) {
+      if (!db) return;
+      setIsLoadingDaily(true);
+      setDailyError('');
+  
+      try {
+        const qs = await fetchPracticeQuestions(db, skill.skillId, practiceLevel, 5);
+  
+        if (!qs.length) {
+          setDailyError(
+            'No approved questions available yet for this skill/difficulty. Please add more to the bank.'
+          );
+          setIsLoadingDaily(false);
+          return;
+        }
+  
+        setActivePracticeSkill(skill);
+        setDailyQuestions(qs);
+        setIsDailyPracticeMode(true);
+        setView('practice');
+      } catch (err) {
+        console.error(err);
+        setDailyError('Error loading Daily 5 questions. Check console.');
+        setIsLoadingDaily(false);
+      }
+    } else {
+      // Non-daily practice: keep old AI-based behavior for now
+      setActivePracticeSkill(skill);
+      setDailyQuestions(null);
+      setIsDailyPracticeMode(false);
+      setView('practice');
+    }
   };
-
+  
   const currentMastery = dailySkill
     ? userProfile.skillMastery[dailySkill.skillId] || 0
     : 0;
