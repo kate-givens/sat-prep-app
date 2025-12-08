@@ -8,7 +8,6 @@ import { fetchPracticeQuestions } from '../services/questionBankService.js';
 // Helper
 const calculatePriorityScore = (mastery, weight) => (100 - mastery) * weight;
 const getFormattedDate = () => new Date().toISOString().split('T')[0];
-
 const DashboardPage = () => {
   // 1. Get SKILLS and SAT_STRUCTURE from the Context ("The Brain")
   // instead of importing the file directly.
@@ -21,11 +20,12 @@ const DashboardPage = () => {
     SKILLS,         // <--- Added this
     SAT_STRUCTURE   // <--- Added this
   } = useFirebase();
-
   const [view, setView] = useState('overview');
   const [activePracticeSkill, setActivePracticeSkill] = useState(null);
   const [isDailyPracticeMode, setIsDailyPracticeMode] = useState(false);
-
+  const [dailyQuestions, setDailyQuestions] = useState(null);
+  const [isLoadingDaily, setIsLoadingDaily] = useState(false);
+  const [dailyError, setDailyError] = useState('');
   const dailySkill = useMemo(() => {
     if (!userProfile?.skillMastery || !SKILLS) return null; // Added !SKILLS check
     let highest = -1,
