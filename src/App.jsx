@@ -38,7 +38,8 @@ const AppRouter = () => {
     );
   }
 
-  return !userProfile.hasTakenDiagnostic ? <DiagnosticPage /> : <DashboardPage />;
+  return <DashboardPage />;
+
 };
 
 const App = () => (
