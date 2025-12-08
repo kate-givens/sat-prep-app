@@ -1,116 +1,163 @@
 import React, { useState, useMemo } from 'react';
-import OverviewView from '../components/OverviewView.jsx'; // Ensure .jsx extension
-import PracticeView from '../components/PracticeView.jsx'; // Ensure .jsx extension
-import { useFirebase } from '../context/FirebaseContext.jsx'; // Ensure .jsx extension
-import { fetchPracticeQuestions } from '../services/questionBankService.js';
+import { collection, query, where, limit, getDocs } from 'firebase/firestore';
+import { useFirebase } from '../context/FirebaseContext.jsx';
+import { APP_ID } from '../config/constants.js';
+import OverviewView from '../components/OverviewView.jsx';
+import PracticeView from '../components/PracticeView.jsx';
 
-
-// Helper
-const calculatePriorityScore = (mastery, weight) => (100 - mastery) * weight;
-const getFormattedDate = () => new Date().toISOString().split('T')[0];
 const DashboardPage = () => {
-  // 1. Get SKILLS and SAT_STRUCTURE from the Context ("The Brain")
-  // instead of importing the file directly.
   const {
     userProfile,
+    SKILLS,
+    SAT_STRUCTURE,
     logout,
     updateMastery,
     completeDailyGoal,
     db,
-    SKILLS,         // <--- Added this
-    SAT_STRUCTURE   // <--- Added this
   } = useFirebase();
+
   const [view, setView] = useState('overview');
   const [activePracticeSkill, setActivePracticeSkill] = useState(null);
   const [isDailyPracticeMode, setIsDailyPracticeMode] = useState(false);
-  const [dailyQuestions, setDailyQuestions] = useState(null);
+  const [practiceQuestions, setPracticeQuestions] = useState(null);
   const [isLoadingDaily, setIsLoadingDaily] = useState(false);
   const [dailyError, setDailyError] = useState('');
-  const dailySkill = useMemo(() => {
-    if (!userProfile?.skillMastery || !SKILLS) return null; // Added !SKILLS check
-    let highest = -1,
-      selected = null;
 
-  const [dailyQuestions, setDailyQuestions] = useState(null);
-  const [isLoadingDaily, setIsLoadingDaily] = useState(false);
-  const [dailyError, setDailyError] = useState('');
-      
-    
-    // 2. Changed ALL_SKILLS to SKILLS
+  const dailySkill = useMemo(() => {
+    if (!userProfile?.skillMastery) return null;
+
+    let highestScore = -1;
+    let selected = null;
+
     SKILLS.forEach((skill) => {
-      const mastery = calculatePriorityScore(
-        userProfile.skillMastery[skill.skillId] || 0,
-        skill.domainWeight
+      const mastery = userProfile.skillMastery[skill.skillId] || 0;
+      const domain = SAT_STRUCTURE.find(
+        (d) => d.domainId === skill.domainId
       );
-      if (mastery > highest) {
-        highest = mastery;
+      const weight = domain ? domain.weight : 0.25;
+      const priorityScore = (100 - mastery) * weight;
+
+      if (priorityScore > highestScore) {
+        highestScore = priorityScore;
         selected = skill;
       }
     });
+
     return selected;
-  }, [userProfile, SKILLS]);
+  }, [userProfile, SKILLS, SAT_STRUCTURE]);
 
   const isDailyComplete = useMemo(() => {
-    const today = getFormattedDate();
+    if (!userProfile?.dailyProgress) return false;
+    const today = new Date().toISOString().split('T')[0];
+
     return (
-      userProfile?.dailyProgress?.date === today &&
-      userProfile?.dailyProgress?.completed
+      userProfile.dailyProgress.date === today &&
+      userProfile.dailyProgress.completed
     );
   }, [userProfile]);
 
-  const startPractice = async (skill) => {
-    // Is this the Daily Priority skill, and is the day not yet complete?
-    const isDailySkill = dailySkill && skill.skillId === dailySkill.skillId && !isDailyComplete;
-  
-    if (isDailySkill) {
-      if (!db) return;
-      setIsLoadingDaily(true);
-      setDailyError('');
-  
-      try {
-        const qs = await fetchPracticeQuestions(db, skill.skillId, practiceLevel, 5);
-  
-        if (!qs.length) {
-          setDailyError(
-            'No approved questions available yet for this skill/difficulty. Please add more to the bank.'
-          );
-          setIsLoadingDaily(false);
-          return;
-        }
-  
-        setActivePracticeSkill(skill);
-        setDailyQuestions(qs);
-        setIsDailyPracticeMode(true);
-        setView('practice');
-      } catch (err) {
-        console.error(err);
-        setDailyError('Error loading Daily 5 questions. Check console.');
-        setIsLoadingDaily(false);
-      }
-    } else {
-      // Non-daily practice: keep old AI-based behavior for now
-      setActivePracticeSkill(skill);
-      setDailyQuestions(null);
-      setIsDailyPracticeMode(false);
-      setView('practice');
-    }
-  };
-  
   const currentMastery = dailySkill
     ? userProfile.skillMastery[dailySkill.skillId] || 0
     : 0;
-  
-  // 3. Ensure SAT_STRUCTURE is available
-  const currentDomain = dailySkill && SAT_STRUCTURE
+
+  const currentDomain = dailySkill
     ? SAT_STRUCTURE.find((d) => d.domainId === dailySkill.domainId)
     : null;
-    
+
   const practiceLevel =
     currentMastery < 25 ? 'Easy' : currentMastery < 75 ? 'Medium' : 'Hard';
 
+  const pickDifficultyForMastery = (mastery) => {
+    if (mastery < 25) return 'Easy';
+    if (mastery < 75) return 'Medium';
+    return 'Hard';
+  };
+
+  const startPractice = async (skill) => {
+    if (!skill || !db) return;
+
+    setActivePracticeSkill(skill);
+    setDailyError('');
+    setIsLoadingDaily(true);
+
+    const isDaily =
+      dailySkill &&
+      skill.skillId === dailySkill.skillId &&
+      !isDailyComplete;
+
+    setIsDailyPracticeMode(isDaily);
+
+    try {
+      const skillMastery = userProfile.skillMastery[skill.skillId] ?? 0;
+      const targetDifficulty = pickDifficultyForMastery(skillMastery);
+
+      const bankRef = collection(
+        db,
+        'artifacts',
+        APP_ID,
+        'public',
+        'data',
+        'questionBank'
+      );
+
+      // For now: always filter by skillId, *try* to match difficulty, ignore status
+      const qBank = query(
+        bankRef,
+        where('skillId', '==', skill.skillId),
+        where('difficulty', '==', targetDifficulty),
+        limit(5)
+      );
+
+      const snapshot = await getDocs(qBank);
+      const questions = snapshot.docs.map((doc) => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+
+      if (!questions.length) {
+        // Fallback: any 5 questions for that skill, any difficulty
+        const qAny = query(
+          bankRef,
+          where('skillId', '==', skill.skillId),
+          limit(5)
+        );
+        const snapAny = await getDocs(qAny);
+        const anyQuestions = snapAny.docs.map((doc) => ({
+          id: doc.id,
+          ...doc.data(),
+        }));
+
+        if (!anyQuestions.length) {
+          setPracticeQuestions(null);
+          setDailyError(
+            `No question bank items found for skill ${skill.skillId}.`
+          );
+        } else {
+          setPracticeQuestions(anyQuestions);
+        }
+      } else {
+        setPracticeQuestions(questions);
+      }
+    } catch (err) {
+      console.error('Error loading bank questions:', err);
+      setPracticeQuestions(null);
+      setDailyError('Error loading bank questions.');
+    } finally {
+      setIsLoadingDaily(false);
+      setView('practice');
+    }
+  };
+
+  if (!userProfile) {
+    return (
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <p className="text-gray-500">Loading dashboard…</p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col font-['Montserrat']">
-      {/* Header */}
       <header className="bg-white border-b border-gray-100 px-8 py-4 flex justify-between items-center sticky top-0 z-30 shadow-sm/50 backdrop-blur-md bg-white/90">
         <div
           className="flex items-center space-x-3 cursor-pointer"
@@ -140,6 +187,7 @@ const DashboardPage = () => {
           </button>
         </div>
       </header>
+
       <div className="flex-1">
         {view === 'overview' ? (
           <OverviewView
@@ -149,7 +197,7 @@ const DashboardPage = () => {
             practiceLevel={practiceLevel}
             startPractice={startPractice}
             userProfile={userProfile}
-            SKILLS={SKILLS} // Use SKILLS here
+            SKILLS={SKILLS}
             isDailyComplete={isDailyComplete}
           />
         ) : (
@@ -161,6 +209,9 @@ const DashboardPage = () => {
             completeDailyGoal={completeDailyGoal}
             isDailySession={isDailyPracticeMode}
             db={db}
+            initialQuestions={practiceQuestions}
+            loadingLabel={isLoadingDaily ? 'Loading questions…' : ''}
+            errorLabel={dailyError}
           />
         )}
       </div>
