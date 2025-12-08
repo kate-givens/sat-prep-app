@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { addDoc, collection } from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
@@ -6,6 +6,7 @@ import {
   generateQuestionsToBank,
   fetchDraftQuestions,
   setQuestionStatus,
+  fetchQuestionCountsBySkill,
 } from '../services/questionBankService';
 
 
@@ -31,6 +32,33 @@ const AdminPage = ({ setView }) => {
   const [reviewQuestions, setReviewQuestions] = useState([]);
   const [reviewStatus, setReviewStatus] = useState('');
   const [isLoadingReview, setIsLoadingReview] = useState(false);
+
+  const [skillCounts, setSkillCounts] = useState([]);
+  const [isLoadingCounts, setIsLoadingCounts] = useState(false);
+  const [countsStatus, setCountsStatus] = useState('');
+
+  const loadSkillCounts = async () => {
+    if (!db) return;
+    setIsLoadingCounts(true);
+    setCountsStatus('Loading question counts...');
+
+    try {
+      const counts = await fetchQuestionCountsBySkill(db, SKILLS);
+      setSkillCounts(counts);
+      setCountsStatus('Counts updated.');
+    } catch (e) {
+      console.error(e);
+      setCountsStatus('Error loading counts. Check console.');
+    } finally {
+      setIsLoadingCounts(false);
+      setTimeout(() => setCountsStatus(''), 4000);
+    }
+  };
+
+  useEffect(() => {
+    if (db) loadSkillCounts();
+  }, [db]);
+
 
   const handleSave = async () => {
     if (!db) return;
@@ -141,6 +169,85 @@ const AdminPage = ({ setView }) => {
 
         {/* === Existing Seed Builder Panel === */}
         <section className="space-y-4 border-b border-gray-100 pb-8">
+          {/* === Question Bank Overview Panel === */}
+          <section className="space-y-4 border-b border-gray-100 pb-6 mb-4">
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-widest">
+              Question Bank Overview
+            </h3>
+            <button
+              onClick={loadSkillCounts}
+              disabled={isLoadingCounts}
+              className={`px-3 py-1.5 text-xs rounded-lg font-medium text-white transition-all ${
+                isLoadingCounts
+                  ? 'bg-gray-300 cursor-not-allowed'
+                  : 'bg-gray-800 hover:bg-black'
+              }`}
+            >
+              {isLoadingCounts ? 'Refreshing…' : 'Refresh'}
+            </button>
+          </div>
+
+          {countsStatus && (
+            <p className="text-[11px] text-gray-500">{countsStatus}</p>
+          )}
+
+          <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
+            <table className="min-w-full text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="text-left px-3 py-2 font-semibold text-gray-600">
+                    Skill
+                  </th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-600">
+                    Approved
+                  </th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-600">
+                    Draft
+                  </th>
+                  <th className="text-right px-3 py-2 font-semibold text-gray-600">
+                    Total
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {skillCounts.map((s) => (
+                  <tr key={s.skillId} className="border-t border-gray-100">
+                    <td className="px-3 py-2 text-gray-800">
+                      <div className="flex flex-col">
+                        <span className="font-medium">{s.name}</span>
+                        <span className="text-[10px] text-gray-400">
+                          {s.skillId}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right text-green-700">
+                      {s.approvedCount}
+                    </td>
+                    <td className="px-3 py-2 text-right text-amber-700">
+                      {s.draftCount}
+                    </td>
+                    <td className="px-3 py-2 text-right text-gray-800">
+                      {s.totalCount}
+                    </td>
+                  </tr>
+                ))}
+
+                {!skillCounts.length && !isLoadingCounts && (
+                  <tr>
+                    <td
+                      colSpan={4}
+                      className="px-3 py-4 text-center text-gray-400"
+                    >
+                      No data loaded yet.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+
   <h3 className="text-sm font-semibold text-gray-700 uppercase tracking-widest">
     Seed Patterns
   </h3>
