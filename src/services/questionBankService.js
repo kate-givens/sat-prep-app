@@ -202,48 +202,57 @@ export const fetchPracticeQuestions = async (
 /**
  * Get counts of approved + draft questions per skill
  */
-export const fetchQuestionCountsBySkill = async (db, skills) => {
-  if (!db || !skills || !skills.length) return [];
-
-  const questionsRef = collection(
-    db,
-    'artifacts',
-    APP_ID,
-    'public',
-    'data',
-    'questionBank'
+export const fetchQuestionCountsBySkill = async (db, skills = []) => {
+  const snap = await getDocs(
+    collection(db, 'artifacts', APP_ID, 'public', 'data', 'questionBank')
   );
 
-  const results = [];
+  const countsBySkill = new Map();
 
-  for (const skill of skills) {
-    const base = { skillId: skill.skillId, name: skill.name || skill.skillId };
+  const initSkillEntry = (skillId) => ({
+    skillId,
+    totalCount: 0,
+    difficultyStatusBreakdown: {
+      Easy:   { total: 0, approved: 0, draft: 0, other: 0 },
+      Medium: { total: 0, approved: 0, draft: 0, other: 0 },
+      Hard:   { total: 0, approved: 0, draft: 0, other: 0 },
+    },
+  });
 
-    // draft
-    const draftQuery = query(
-      questionsRef,
-      where('skillId', '==', skill.skillId),
-      where('status', '==', 'draft')
-    );
-    const draftSnap = await getCountFromServer(draftQuery);
-    const draftCount = draftSnap.data().count || 0;
+  const ensureSkillEntry = (skillId) => {
+    if (!countsBySkill.has(skillId)) {
+      countsBySkill.set(skillId, initSkillEntry(skillId));
+    }
+    return countsBySkill.get(skillId);
+  };
 
-    // approved
-    const approvedQuery = query(
-      questionsRef,
-      where('skillId', '==', skill.skillId),
-      where('status', '==', 'approved')
-    );
-    const approvedSnap = await getCountFromServer(approvedQuery);
-    const approvedCount = approvedSnap.data().count || 0;
+  snap.forEach((docSnap) => {
+    const data = docSnap.data();
+    const skillId = data.skillId || 'UNKNOWN';
+    const difficulty = data.difficulty || 'Medium';
+    const status = data.status || 'draft';
 
-    results.push({
-      ...base,
-      draftCount,
-      approvedCount,
-      totalCount: draftCount + approvedCount,
-    });
-  }
+    const entry = ensureSkillEntry(skillId);
+    entry.totalCount += 1;
 
-  return results;
+    // Normalize difficulty to one of the three buckets
+    const diffKey =
+      difficulty === 'Easy' || difficulty === 'Hard' ? difficulty : 'Medium';
+
+    const bucket = entry.difficultyStatusBreakdown[diffKey];
+
+    bucket.total += 1;
+    if (status === 'approved') bucket.approved += 1;
+    else if (status === 'draft') bucket.draft += 1;
+    else bucket.other += 1; // rejected, archived, etc.
+  });
+
+  // Make sure every SKILL shows up even if count is 0
+  skills.forEach((s) => {
+    if (!countsBySkill.has(s.skillId)) {
+      countsBySkill.set(s.skillId, initSkillEntry(s.skillId));
+    }
+  });
+
+  return Array.from(countsBySkill.values());
 };
