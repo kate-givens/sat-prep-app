@@ -1,9 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { addDoc, collection } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc } from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
 import {
-  generateQuestionsToBank,
   fetchDraftQuestions,
   setQuestionStatus,
   fetchQuestionCountsBySkill,
@@ -11,42 +10,42 @@ import {
 
 const AdminPage = ({ setView }) => {
   const { db, SKILLS } = useFirebase();
+  const firstSkillId = SKILLS?.[0]?.skillId ?? '';
+
   const [activeTab, setActiveTab] = useState('overview');
 
+  const getOptionText = (opt) => {
+    if (typeof opt === 'string') return opt;
+    if (!opt || typeof opt !== 'object') return String(opt ?? '');
+    if (opt.text) return opt.text;
+    // fallback if the shape is weird
+    return String(opt.label ?? '');
+  };
   // --- 1. DATA PROCESSING: Group Skills by Domain ---
   const groupSkillsByDomain = (skillsList) => {
     if (!skillsList) return {};
     return skillsList.reduce((acc, skill) => {
-      // If your skill object doesn't have a 'domain' property, 
-      // it will group under "General"
-      const domain = skill.domain || 'General'; 
+      const domain = skill.domain || 'General';
       if (!acc[domain]) acc[domain] = [];
       acc[domain].push(skill);
       return acc;
     }, {});
   };
 
-  const groupedSkills = groupSkillsByDomain(SKILLS);
+  const groupedSkills = groupSkillsByDomain(SKILLS || []);
   const domains = Object.keys(groupedSkills).sort();
 
   // --- STATE ---
-  
+
   // Seed State
-  const [selectedSkill, setSelectedSkill] = useState(SKILLS[0]?.skillId || '');
+  const [selectedSkill, setSelectedSkill] = useState(firstSkillId);
   const [context, setContext] = useState('');
   const [distractorLogic, setDistractorLogic] = useState('');
   const [status, setStatus] = useState('');
   const [seedDifficulty, setSeedDifficulty] = useState('Medium');
 
-  // Generation State
-  const [genSkillId, setGenSkillId] = useState(SKILLS[0]?.skillId || '');
-  const [genDifficulty, setGenDifficulty] = useState('Medium');
-  const [genCount, setGenCount] = useState(5);
-  const [genStatus, setGenStatus] = useState('');
-  const [isGenerating, setIsGenerating] = useState(false);
-
   // Review State
-  const [reviewSkillId, setReviewSkillId] = useState(SKILLS[0]?.skillId || '');
+  const [reviewSkillId, setReviewSkillId] = useState(firstSkillId);
   const [reviewDifficulty, setReviewDifficulty] = useState('Medium');
   const [reviewQuestions, setReviewQuestions] = useState([]);
   const [reviewStatus, setReviewStatus] = useState('');
@@ -57,17 +56,55 @@ const AdminPage = ({ setView }) => {
   const [isLoadingCounts, setIsLoadingCounts] = useState(false);
   const [countsStatus, setCountsStatus] = useState('');
 
+  // Manual Import State
+  const [importSkillId, setImportSkillId] = useState(firstSkillId);
+  const [importDifficulty, setImportDifficulty] = useState('Medium');
+  const [importPassage, setImportPassage] = useState('');
+  const [importQuestion, setImportQuestion] = useState('');
+  const [importOptions, setImportOptions] = useState(['', '', '', '']);
+  const [importCorrect, setImportCorrect] = useState('A');
+  const [importExplanation, setImportExplanation] = useState('');
+  const [importStatus, setImportStatus] = useState('');
+
+  // Edit-in-place State (for review questions)
+  const [editingQuestionId, setEditingQuestionId] = useState(null);
+  const [editForm, setEditForm] = useState({
+    passageText: '',
+    questionText: '',
+    options: ['', '', '', ''],
+    correctAnswer: 'A',
+    explanation: '',
+  });
+  const [editStatus, setEditStatus] = useState('');
+
+  // Keep initial skill-based state in sync once SKILLS loads
+  useEffect(() => {
+    if (!SKILLS?.length) return;
+    const firstId = SKILLS[0].skillId;
+
+    setSelectedSkill((prev) => prev || firstId);
+    setReviewSkillId((prev) => prev || firstId);
+    setImportSkillId((prev) => prev || firstId);
+  }, [SKILLS]);
+
   // --- HANDLERS ---
 
   const loadSkillCounts = async () => {
-    if (!db) return;
+    if (!db || !SKILLS?.length) return;
     setIsLoadingCounts(true);
     setCountsStatus('Refreshing...');
     try {
-      const counts = await fetchQuestionCountsBySkill(db, SKILLS);
-      // Ensure your service returns structure like: 
-      // { skillId, totalCount, difficultyBreakdown: { Easy: 5, Medium: 2, Hard: 1 } }
-      setSkillCounts(counts);
+      const rawCounts = await fetchQuestionCountsBySkill(db, SKILLS);
+      // Attach name/domain from SKILLS metadata
+      const countsWithMeta = rawCounts.map((c) => {
+        const meta = SKILLS.find((s) => s.skillId === c.skillId) || {};
+        return {
+          ...c,
+          name: meta.name || c.skillId,
+          domain: meta.domain || 'General',
+        };
+      });
+      setSkillCounts(countsWithMeta);
       setCountsStatus('');
     } catch (e) {
       console.error(e);
@@ -78,11 +115,17 @@ const AdminPage = ({ setView }) => {
   };
 
   useEffect(() => {
-    if (db) loadSkillCounts();
-  }, [db]);
+    if (db && SKILLS?.length) {
+      loadSkillCounts();
+    }
+  }, [db, SKILLS]);
 
   const handleSaveSeed = async () => {
     if (!db) return;
+    if (!context.trim() || !distractorLogic.trim()) {
+      setStatus('Please fill in both fields.');
+      return;
+    }
     setStatus('Saving...');
     try {
       await addDoc(
@@ -131,22 +174,109 @@ const AdminPage = ({ setView }) => {
     }
   };
 
-  const handleGenerateQuestions = async () => {
+  // Manual import handler
+  const handleManualImport = async () => {
     if (!db) return;
-    const skill = SKILLS.find((s) => s.skillId === genSkillId);
-    if (!skill) return;
 
-    setIsGenerating(true);
-    setGenStatus('Generating...');
+    if (!importQuestion.trim() || importOptions.some((o) => !o.trim())) {
+      setImportStatus('Please fill in the question and all four answer choices.');
+      return;
+    }
+
+    setImportStatus('Saving...');
     try {
-      const created = await generateQuestionsToBank(db, skill, genDifficulty, Number(genCount) || 5);
-      setGenStatus(`Generated ${created.length} drafts.`);
+      await addDoc(
+        collection(db, 'artifacts', APP_ID, 'public', 'data', 'questionBank'),
+        {
+          skillId: importSkillId,
+          difficulty: importDifficulty,
+          passageText: importPassage.trim() || null,
+          questionText: importQuestion.trim(),
+          options: importOptions.map((o) => o.trim()),
+          correctAnswer: importCorrect,
+          explanation: importExplanation.trim() || null,
+          status: 'approved', // manual imports count as vetted
+          createdAt: new Date(),
+        }
+      );
+      setImportStatus('Saved!');
+      setImportPassage('');
+      setImportQuestion('');
+      setImportOptions(['', '', '', '']);
+      setImportCorrect('A');
+      setImportExplanation('');
+      setTimeout(() => setImportStatus(''), 3000);
     } catch (e) {
       console.error(e);
-      setGenStatus('Error generating.');
-    } finally {
-      setIsGenerating(false);
-      setTimeout(() => setGenStatus(''), 4000);
+      setImportStatus('Error saving.');
+    }
+  };
+
+  // Editing handlers
+  const startEditing = (q) => {
+    setEditingQuestionId(q.id);
+    setEditForm({
+      passageText: q.passageText || '',
+      questionText: q.questionText || '',
+      options: (q.options || []).map(getOptionText),
+      correctAnswer: q.correctAnswer || 'A',
+      explanation: q.explanation || '',
+    });
+    setEditStatus('');
+  };
+  
+
+  const cancelEdit = () => {
+    setEditingQuestionId(null);
+    setEditForm({
+      passageText: '',
+      questionText: '',
+      options: ['', '', '', ''],
+      correctAnswer: 'A',
+      explanation: '',
+    });
+    setEditStatus('');
+  };
+
+  const handleSaveEdit = async () => {
+    if (!db || !editingQuestionId) return;
+    if (!editForm.questionText.trim() || editForm.options.some((o) => !o.trim())) {
+      setEditStatus('Please fill in the question and all four choices.');
+      return;
+    }
+
+    setEditStatus('Saving...');
+    try {
+      const ref = doc(
+        db,
+        'artifacts',
+        APP_ID,
+        'public',
+        'data',
+        'questionBank',
+        editingQuestionId
+      );
+
+      await updateDoc(ref, {
+        passageText: editForm.passageText.trim() || null,
+        questionText: editForm.questionText.trim(),
+        options: editForm.options.map((o) => o.trim()),
+        correctAnswer: editForm.correctAnswer,
+        explanation: editForm.explanation.trim() || null,
+        updatedAt: new Date(),
+      });
+
+      setReviewQuestions((prev) =>
+        prev.map((q) =>
+          q.id === editingQuestionId ? { ...q, ...editForm } : q
+        )
+      );
+      setEditStatus('Saved!');
+      setTimeout(() => setEditStatus(''), 2000);
+      setEditingQuestionId(null);
+    } catch (e) {
+      console.error(e);
+      setEditStatus('Error saving.');
     }
   };
 
@@ -167,18 +297,31 @@ const AdminPage = ({ setView }) => {
 
   const SkillSelect = ({ value, onChange }) => (
     <div className="space-y-1.5">
-      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Skill Target</label>
+      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+        Skill Target
+      </label>
       <div className="relative">
         <select
           value={value}
           onChange={onChange}
           className="w-full bg-white border border-gray-200 text-gray-800 text-sm rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent p-3 outline-none"
         >
+          {domains.length === 0 && (
+            <option disabled>No skills available</option>
+          )}
           {domains.map((domain) => (
-            <optgroup key={domain} label={domain} className="font-semibold text-gray-900 not-italic">
+            <optgroup
+              key={domain}
+              label={domain}
+              className="font-semibold text-gray-900 not-italic"
+            >
               {groupedSkills[domain].map((s) => (
-                <option key={s.skillId} value={s.skillId} className="font-normal text-gray-600">
-                   {s.name}
+                <option
+                  key={s.skillId}
+                  value={s.skillId}
+                  className="font-normal text-gray-600"
+                >
+                  {s.name}
                 </option>
               ))}
             </optgroup>
@@ -190,18 +333,33 @@ const AdminPage = ({ setView }) => {
 
   const SimpleSelect = ({ label, value, onChange, options }) => (
     <div className="space-y-1.5">
-      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">{label}</label>
+      <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+        {label}
+      </label>
       <select
         value={value}
         onChange={onChange}
         className="w-full bg-white border border-gray-200 text-gray-800 text-sm rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent p-3 outline-none"
       >
         {options.map((opt) => (
-          <option key={opt} value={opt}>{opt}</option>
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
         ))}
       </select>
     </div>
   );
+
+  // Loading gate if SKILLS not ready yet
+  if (!SKILLS || !SKILLS.length) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#f3f4f6]">
+        <p className="text-gray-400 text-sm tracking-wider">
+          Loading admin tools…
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#f3f4f6] flex font-sans">
@@ -212,12 +370,12 @@ const AdminPage = ({ setView }) => {
             ADMIN<span className="text-blue-600">PORTAL</span>
           </h2>
         </div>
-        
+
         <nav className="flex-1 px-4 py-6 space-y-2">
           <SidebarItem id="overview" label="Overview" />
           <SidebarItem id="review" label="Review Queue" />
           <SidebarItem id="seed" label="Seed Patterns" />
-          <SidebarItem id="generate" label="AI Generator" />
+          <SidebarItem id="import" label="Add Question" />
         </nav>
 
         <div className="p-4 border-t border-gray-100">
@@ -232,14 +390,17 @@ const AdminPage = ({ setView }) => {
 
       {/* Main Content */}
       <main className="flex-1 ml-64 p-8 max-w-7xl mx-auto">
-        
         {/* VIEW: OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">Question Bank</h1>
-                <p className="text-sm text-gray-500">Inventory breakdown by difficulty and status.</p>
+                <h1 className="text-2xl font-bold text-gray-900">
+                  Question Bank
+                </h1>
+                <p className="text-sm text-gray-500">
+                  Inventory breakdown by difficulty and status.
+                </p>
               </div>
               <button
                 onClick={loadSkillCounts}
@@ -254,42 +415,68 @@ const AdminPage = ({ setView }) => {
               <table className="min-w-full">
                 <thead className="bg-gray-50 border-b border-gray-200">
                   <tr>
-                    <th className="text-left px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">Skill / Domain</th>
-                    {/* NEW: Difficulty Columns */}
-                    <th className="text-right px-4 py-4 text-xs font-bold text-green-600 uppercase tracking-wider">Easy</th>
-                    <th className="text-right px-4 py-4 text-xs font-bold text-amber-600 uppercase tracking-wider">Med</th>
-                    <th className="text-right px-4 py-4 text-xs font-bold text-red-600 uppercase tracking-wider">Hard</th>
-                    <th className="text-right px-6 py-4 text-xs font-bold text-gray-900 uppercase tracking-wider">Total</th>
+                    <th className="text-left px-6 py-4 text-xs font-bold text-gray-500 uppercase tracking-wider">
+                      Skill / Domain
+                    </th>
+                    <th className="text-right px-4 py-4 text-xs font-bold text-green-600 uppercase tracking-wider">
+                      Easy
+                    </th>
+                    <th className="text-right px-4 py-4 text-xs font-bold text-amber-600 uppercase tracking-wider">
+                      Med
+                    </th>
+                    <th className="text-right px-4 py-4 text-xs font-bold text-red-600 uppercase tracking-wider">
+                      Hard
+                    </th>
+                    <th className="text-right px-6 py-4 text-xs font-bold text-gray-900 uppercase tracking-wider">
+                      Total
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {skillCounts.map((s) => {
-                    // NOTE: This assumes your service returns `difficultyBreakdown` or similar keys.
-                    // If your service only returns flat counts, these will default to 0.
-                    const easy = s.difficultyBreakdown?.Easy || s.easyCount || '-';
-                    const medium = s.difficultyBreakdown?.Medium || s.mediumCount || '-';
-                    const hard = s.difficultyBreakdown?.Hard || s.hardCount || '-';
-                    
-                    return (
-                      <tr key={s.skillId} className="hover:bg-gray-50 transition-colors">
-                        <td className="px-6 py-4">
-                          <p className="text-sm font-bold text-gray-800">{s.name}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">
-                            {s.domain || 'General'} • <span className="font-mono">{s.skillId}</span>
-                          </p>
-                        </td>
-                        <td className="px-4 py-4 text-right text-sm text-gray-600 font-medium">{easy}</td>
-                        <td className="px-4 py-4 text-right text-sm text-gray-600 font-medium">{medium}</td>
-                        <td className="px-4 py-4 text-right text-sm text-gray-600 font-medium">{hard}</td>
-                        <td className="px-6 py-4 text-right text-sm font-bold text-gray-900">{s.totalCount}</td>
-                      </tr>
-                    );
-                  })}
-                  {!skillCounts.length && !isLoadingCounts && (
-                    <tr><td colSpan={5} className="px-6 py-8 text-center text-gray-400 text-sm">No data available.</td></tr>
-                  )}
-                </tbody>
+  {skillCounts.map((s) => {
+    const easy = s.difficultyStatusBreakdown?.Easy;
+    const medium = s.difficultyStatusBreakdown?.Medium;
+    const hard = s.difficultyStatusBreakdown?.Hard;
+
+    const formatBucket = (bucket) => {
+      if (!bucket) return '-';
+      if (bucket.total === 0) return '-';
+      // total (approved / draft)
+      return `${bucket.total} (${bucket.approved}✓ / ${bucket.draft}•)`;
+    };
+
+    return (
+      <tr key={s.skillId} className="hover:bg-gray-50 transition-colors">
+        <td className="px-6 py-4">
+          <p className="text-sm font-bold text-gray-800">{s.name}</p>
+          <p className="text-xs text-gray-400 mt-0.5">
+            {s.domain || 'General'} •{' '}
+            <span className="font-mono">{s.skillId}</span>
+          </p>
+        </td>
+        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+          {formatBucket(easy)}
+        </td>
+        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+          {formatBucket(medium)}
+        </td>
+        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+          {formatBucket(hard)}
+        </td>
+        <td className="px-6 py-4 text-right text-sm font-bold text-gray-900">
+          {s.totalCount}
+        </td>
+      </tr>
+    );
+  })}
+  {/* ...no-data row... */}
+</tbody>
+
               </table>
+              <p className="mt-2 text-[11px] text-gray-400">
+  Difficulty columns show: <span className="font-mono">total (approved✓ / draft•)</span>.
+</p>
+
             </div>
           </div>
         )}
@@ -297,20 +484,27 @@ const AdminPage = ({ setView }) => {
         {/* VIEW: SEED PATTERNS */}
         {activeTab === 'seed' && (
           <div className="max-w-3xl mx-auto space-y-6">
-            <h1 className="text-2xl font-bold text-gray-900">Create Seed Pattern</h1>
+            <h1 className="text-2xl font-bold text-gray-900">
+              Create Seed Pattern
+            </h1>
             <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 space-y-6">
               <div className="grid grid-cols-2 gap-6">
-                <SkillSelect value={selectedSkill} onChange={(e) => setSelectedSkill(e.target.value)} />
-                <SimpleSelect 
-                  label="Difficulty" 
-                  value={seedDifficulty} 
-                  onChange={(e) => setSeedDifficulty(e.target.value)} 
+                <SkillSelect
+                  value={selectedSkill}
+                  onChange={(e) => setSelectedSkill(e.target.value)}
+                />
+                <SimpleSelect
+                  label="Difficulty"
+                  value={seedDifficulty}
+                  onChange={(e) => setSeedDifficulty(e.target.value)}
                   options={['Easy', 'Medium', 'Hard']}
                 />
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Context Template</label>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Context Template
+                </label>
                 <textarea
                   className="w-full p-4 border border-gray-200 rounded-lg text-sm h-32 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
                   placeholder="Enter the base context or question structure..."
@@ -320,7 +514,9 @@ const AdminPage = ({ setView }) => {
               </div>
 
               <div className="space-y-1.5">
-                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Distractor Logic</label>
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Distractor Logic
+                </label>
                 <textarea
                   className="w-full p-4 border border-gray-200 rounded-lg text-sm h-32 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
                   placeholder="Explain how incorrect answers should be generated..."
@@ -334,59 +530,117 @@ const AdminPage = ({ setView }) => {
                   onClick={handleSaveSeed}
                   className="w-full py-3.5 bg-gray-900 hover:bg-black text-white rounded-lg font-bold text-sm transition-all shadow-lg active:scale-[0.99]"
                 >
-                   {status === 'Saving...' ? 'Saving...' : 'Save Seed Pattern'}
+                  {status === 'Saving...' ? 'Saving...' : 'Save Seed Pattern'}
                 </button>
-                {status && <p className="text-center text-xs mt-3 text-gray-500">{status}</p>}
+                {status && (
+                  <p className="text-center text-xs mt-3 text-gray-500">
+                    {status}
+                  </p>
+                )}
               </div>
             </div>
           </div>
         )}
 
-        {/* VIEW: GENERATOR */}
-        {activeTab === 'generate' && (
+        {/* VIEW: MANUAL IMPORT */}
+        {activeTab === 'import' && (
           <div className="max-w-3xl mx-auto space-y-6">
-             <h1 className="text-2xl font-bold text-gray-900">AI Generator</h1>
-             
-             <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 space-y-8">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  <SkillSelect value={genSkillId} onChange={(e) => setGenSkillId(e.target.value)} />
-                  <SimpleSelect 
-                    label="Difficulty" 
-                    value={genDifficulty} 
-                    onChange={(e) => setGenDifficulty(e.target.value)} 
-                    options={['Easy', 'Medium', 'Hard']}
-                  />
-                </div>
+            <h1 className="text-2xl font-bold text-gray-900">Add Question</h1>
+            <p className="text-sm text-gray-500">
+              Manually add a fully specified question directly into the bank.
+            </p>
 
+            <div className="bg-white p-8 rounded-xl shadow-sm border border-gray-200 space-y-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <SkillSelect
+                  value={importSkillId}
+                  onChange={(e) => setImportSkillId(e.target.value)}
+                />
+                <SimpleSelect
+                  label="Difficulty"
+                  value={importDifficulty}
+                  onChange={(e) => setImportDifficulty(e.target.value)}
+                  options={['Easy', 'Medium', 'Hard']}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Passage (optional)
+                </label>
+                <textarea
+                  className="w-full p-4 border border-gray-200 rounded-lg text-sm h-28 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                  placeholder="Any stimulus or passage text that goes before the question..."
+                  value={importPassage}
+                  onChange={(e) => setImportPassage(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                  Question Text
+                </label>
+                <textarea
+                  className="w-full p-4 border border-gray-200 rounded-lg text-sm h-24 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                  placeholder="Full question as the student will see it..."
+                  value={importQuestion}
+                  onChange={(e) => setImportQuestion(e.target.value)}
+                />
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {['A', 'B', 'C', 'D'].map((letter, idx) => (
+                  <div key={letter} className="space-y-1.5">
+                    <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                      Choice {letter}
+                    </label>
+                    <input
+                      type="text"
+                      className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                      value={importOptions[idx]}
+                      onChange={(e) => {
+                        const next = [...importOptions];
+                        next[idx] = e.target.value;
+                        setImportOptions(next);
+                      }}
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <SimpleSelect
+                  label="Correct Answer"
+                  value={importCorrect}
+                  onChange={(e) => setImportCorrect(e.target.value)}
+                  options={['A', 'B', 'C', 'D']}
+                />
                 <div className="space-y-1.5">
-                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">Quantity</label>
-                  <input
-                    type="number"
-                    min="1"
-                    max="50"
-                    value={genCount}
-                    onChange={(e) => setGenCount(e.target.value)}
-                    className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                  <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                    Explanation (optional)
+                  </label>
+                  <textarea
+                    className="w-full p-3 border border-gray-200 rounded-lg text-sm h-24 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                    value={importExplanation}
+                    onChange={(e) => setImportExplanation(e.target.value)}
                   />
                 </div>
+              </div>
 
-                <div className="pt-4 border-t border-gray-100">
-                  <button
-                    onClick={handleGenerateQuestions}
-                    disabled={isGenerating}
-                    className={`w-full py-4 rounded-lg text-sm font-bold text-white transition-all shadow-md ${
-                      isGenerating
-                        ? 'bg-blue-300 cursor-not-allowed'
-                        : 'bg-blue-600 hover:bg-blue-700 active:scale-[0.99]'
-                    }`}
-                  >
-                    {isGenerating ? 'Generating Content...' : 'Generate Questions'}
-                  </button>
-                  {genStatus && (
-                    <p className="mt-4 text-center text-xs text-gray-500">{genStatus}</p>
-                  )}
-                </div>
-             </div>
+              <div className="pt-2">
+                <button
+                  onClick={handleManualImport}
+                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-bold text-sm transition-all shadow-lg active:scale-[0.99]"
+                >
+                  Save Question
+                </button>
+                {importStatus && (
+                  <p className="text-center text-xs mt-3 text-gray-500">
+                    {importStatus}
+                  </p>
+                )}
+              </div>
+            </div>
           </div>
         )}
 
@@ -394,28 +648,31 @@ const AdminPage = ({ setView }) => {
         {activeTab === 'review' && (
           <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col">
             <div className="flex justify-between items-end bg-white p-6 rounded-xl shadow-sm border border-gray-200">
-               <div className="flex gap-4 flex-1">
-                 <div className="w-1/2">
-                   <SkillSelect value={reviewSkillId} onChange={(e) => setReviewSkillId(e.target.value)} />
-                 </div>
-                 <div className="w-40">
-                   <SimpleSelect 
-                      label="Difficulty" 
-                      value={reviewDifficulty} 
-                      onChange={(e) => setReviewDifficulty(e.target.value)} 
-                      options={['Easy', 'Medium', 'Hard']}
-                    />
-                 </div>
-               </div>
-               <button
-                  onClick={loadDraftQuestions}
-                  disabled={isLoadingReview}
-                  className="px-6 py-3 bg-gray-900 text-white text-sm font-bold rounded-lg hover:bg-black transition-all shadow-md h-fit"
-                >
-                  {isLoadingReview ? 'Loading...' : 'Load Batch'}
-                </button>
+              <div className="flex gap-4 flex-1">
+                <div className="w-1/2">
+                  <SkillSelect
+                    value={reviewSkillId}
+                    onChange={(e) => setReviewSkillId(e.target.value)}
+                  />
+                </div>
+                <div className="w-40">
+                  <SimpleSelect
+                    label="Difficulty"
+                    value={reviewDifficulty}
+                    onChange={(e) => setReviewDifficulty(e.target.value)}
+                    options={['Easy', 'Medium', 'Hard']}
+                  />
+                </div>
+              </div>
+              <button
+                onClick={loadDraftQuestions}
+                disabled={isLoadingReview}
+                className="px-6 py-3 bg-gray-900 text-white text-sm font-bold rounded-lg hover:bg-black transition-all shadow-md h-fit"
+              >
+                {isLoadingReview ? 'Loading...' : 'Load Batch'}
+              </button>
             </div>
-            
+
             <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
               {reviewStatus && !reviewQuestions.length && (
                 <div className="h-64 flex flex-col items-center justify-center text-gray-400 text-sm">
@@ -423,82 +680,225 @@ const AdminPage = ({ setView }) => {
                 </div>
               )}
 
-              {reviewQuestions.map((q) => (
-                <div key={q.id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-shadow">
-                  <div className="flex justify-between items-start mb-4">
-                    <div className="flex gap-2">
-                      <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider">
-                        {q.skillId}
-                      </span>
-                      <span className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
-                        q.difficulty === 'Hard' ? 'bg-red-50 text-red-700' : 
-                        q.difficulty === 'Medium' ? 'bg-amber-50 text-amber-700' : 
-                        'bg-green-50 text-green-700'
-                      }`}>
-                        {q.difficulty}
-                      </span>
-                    </div>
-                    
-                    <div className="flex gap-3">
-                      <button
-                        onClick={() => handleSetQuestionStatus(q.id, 'rejected')}
-                        className="text-xs font-bold text-red-600 hover:text-red-800"
-                      >
-                        REJECT
-                      </button>
-                      <button
-                        onClick={() => handleSetQuestionStatus(q.id, 'approved')}
-                        className="text-xs font-bold text-green-600 hover:text-green-800"
-                      >
-                        APPROVE
-                      </button>
-                    </div>
-                  </div>
+              {reviewQuestions.map((q) => {
+                const isEditing = editingQuestionId === q.id;
 
-                  {q.passageText && (
-                    <div className="mb-4 p-4 bg-gray-50 rounded-lg text-sm text-gray-700 italic border-l-4 border-gray-200">
-                      {q.passageText}
-                    </div>
-                  )}
-
-                  <h3 className="text-base font-medium text-gray-900 mb-4 leading-relaxed">
-                    {q.questionText}
-                  </h3>
-
-                  <div className="space-y-2 mb-6">
-                    {q.options?.map((opt, i) => {
-                      const letter = String.fromCharCode(65 + i);
-                      const isCorrect = letter === q.correctAnswer;
-                      return (
-                        <div 
-                          key={letter} 
-                          className={`flex p-3 rounded-lg text-sm transition-colors ${
-                            isCorrect 
-                              ? 'bg-green-50 border border-green-200 text-green-900 font-medium' 
-                              : 'bg-white border border-gray-200 text-gray-600'
+                return (
+                  <div
+                    key={q.id}
+                    className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
+                  >
+                    <div className="flex justify-between items-start mb-4">
+                      <div className="flex gap-2">
+                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider">
+                          {q.skillId}
+                        </span>
+                        <span
+                          className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
+                            q.difficulty === 'Hard'
+                              ? 'bg-red-50 text-red-700'
+                              : q.difficulty === 'Medium'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-green-50 text-green-700'
                           }`}
                         >
-                          <span className={`font-mono font-bold mr-3 ${isCorrect ? 'text-green-700' : 'text-gray-400'}`}>
-                            {letter}.
-                          </span>
-                          <span>{opt}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
+                          {q.difficulty}
+                        </span>
+                      </div>
 
-                  {q.explanation && (
-                    <div className="text-xs text-gray-500 mt-4 pt-4 border-t border-gray-100">
-                      <span className="font-bold text-gray-900 uppercase tracking-wide mr-2">Explanation:</span>
-                      {q.explanation}
+                      <div className="flex gap-3 items-center">
+                        <button
+                          onClick={() => startEditing(q)}
+                          className="text-xs font-bold text-blue-600 hover:text-blue-800"
+                        >
+                          EDIT
+                        </button>
+                        <button
+                          onClick={() =>
+                            handleSetQuestionStatus(q.id, 'rejected')
+                          }
+                          className="text-xs font-bold text-red-600 hover:text-red-800"
+                        >
+                          REJECT
+                        </button>
+                        <button
+                          onClick={() =>
+                            handleSetQuestionStatus(q.id, 'approved')
+                          }
+                          className="text-xs font-bold text-green-600 hover:text-green-800"
+                        >
+                          APPROVE
+                        </button>
+                      </div>
                     </div>
-                  )}
-                </div>
-              ))}
+
+                    {/* Passage */}
+                    {q.passageText && !isEditing && (
+                      <div className="mb-4 p-4 bg-gray-50 rounded-lg text-sm text-gray-700 italic border-l-4 border-gray-200">
+                        {q.passageText}
+                      </div>
+                    )}
+
+                    {/* Question text */}
+                    {!isEditing ? (
+                      <h3 className="text-base font-medium text-gray-900 mb-4 leading-relaxed">
+                        {q.questionText}
+                      </h3>
+                    ) : (
+                      <div className="space-y-1.5 mb-4">
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                          Question Text
+                        </label>
+                        <textarea
+                          className="w-full p-3 border border-gray-200 rounded-lg text-sm h-24 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                          value={editForm.questionText}
+                          onChange={(e) =>
+                            setEditForm((prev) => ({
+                              ...prev,
+                              questionText: e.target.value,
+                            }))
+                          }
+                        />
+                      </div>
+                    )}
+
+                    {/* Options */}
+                    {!isEditing ? (
+                      <div className="space-y-2 mb-6">
+                        {q.options?.map((opt, i) => {
+  const letter = String.fromCharCode(65 + i);
+  const isCorrect = letter === q.correctAnswer;
+  const optionText = getOptionText(opt);
+
+  return (
+    <div 
+      key={letter} 
+      className={`flex p-3 rounded-lg text-sm transition-colors ${
+        isCorrect 
+          ? 'bg-green-50 border border-green-200 text-green-900 font-medium' 
+          : 'bg-white border border-gray-200 text-gray-600'
+      }`}
+    >
+      <span className={`font-mono font-bold mr-3 ${isCorrect ? 'text-green-700' : 'text-gray-400'}`}>
+        {letter}.
+      </span>
+      <span>{optionText}</span>
+    </div>
+  );
+})}
+
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                        {['A', 'B', 'C', 'D'].map((letter, idx) => (
+                          <div key={letter} className="space-y-1.5">
+                            <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                              Choice {letter}
+                            </label>
+                            <input
+                              type="text"
+                              className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                              value={editForm.options[idx] || ''}
+                              onChange={(e) => {
+                                const next = [...editForm.options];
+                                next[idx] = e.target.value;
+                                setEditForm((prev) => ({
+                                  ...prev,
+                                  options: next,
+                                }));
+                              }}
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Explanation */}
+                    {!isEditing ? (
+                      q.explanation && (
+                        <div className="text-xs text-gray-500 mt-4 pt-4 border-t border-gray-100">
+                          <span className="font-bold text-gray-900 uppercase tracking-wide mr-2">
+                            Explanation:
+                          </span>
+                          {q.explanation}
+                        </div>
+                      )
+                    ) : (
+                      <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                            Passage (optional)
+                          </label>
+                          <textarea
+                            className="w-full p-3 border border-gray-200 rounded-lg text-sm h-20 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                            value={editForm.passageText}
+                            onChange={(e) =>
+                              setEditForm((prev) => ({
+                                ...prev,
+                                passageText: e.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
+                            Explanation (optional)
+                          </label>
+                          <textarea
+                            className="w-full p-3 border border-gray-200 rounded-lg text-sm h-20 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                            value={editForm.explanation}
+                            onChange={(e) =>
+                              setEditForm((prev) => ({
+                                ...prev,
+                                explanation: e.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+
+                        <div className="flex items-center justify-between mt-2">
+                          <SimpleSelect
+                            label="Correct Answer"
+                            value={editForm.correctAnswer}
+                            onChange={(e) =>
+                              setEditForm((prev) => ({
+                                ...prev,
+                                correctAnswer: e.target.value,
+                              }))
+                            }
+                            options={['A', 'B', 'C', 'D']}
+                          />
+                          <div className="flex gap-3 ml-4 mt-4 md:mt-7">
+                            <button
+                              onClick={cancelEdit}
+                              className="px-4 py-2 text-xs font-bold text-gray-500 border border-gray-200 rounded-lg hover:bg-gray-50"
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              onClick={handleSaveEdit}
+                              className="px-4 py-2 text-xs font-bold text-white bg-blue-600 rounded-lg hover:bg-blue-700"
+                            >
+                              Save Changes
+                            </button>
+                          </div>
+                        </div>
+
+                        {editStatus && (
+                          <p className="text-xs text-gray-500 mt-2">
+                            {editStatus}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              
             </div>
           </div>
         )}
-
       </main>
     </div>
   );

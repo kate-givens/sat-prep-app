@@ -3,7 +3,7 @@ import MathText from './MathText';
 import { addDoc, collection } from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
-
+import DesmosDraggable from './DesmosDraggable';
 
 const PracticeView = ({
   activeSkill,
@@ -16,6 +16,8 @@ const PracticeView = ({
   loadingLabel = '',
   errorLabel = '',
 }) => {
+  const { db, userId } = useFirebase(); // 🔹 pull db + userId from context
+
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [userAnswer, setUserAnswer] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -66,14 +68,9 @@ const PracticeView = ({
     }
   };
 
-
   // Initialize from bank questions
   useEffect(() => {
-    if (
-      activeSkill &&
-      initialQuestions &&
-      initialQuestions.length > 0
-    ) {
+    if (activeSkill && initialQuestions && initialQuestions.length > 0) {
       setQuestionList(initialQuestions);
       setCurrentIndex(0);
       setCurrentQuestion({
@@ -121,7 +118,7 @@ const PracticeView = ({
       correct: isCorrect,
     });
 
-    // 🔹 NEW: log result to Firestore
+    // Log result to Firestore
     await logQuestionResult({
       questionId: currentQuestion.id || null,
       skillId: currentQuestion.skillId || activeSkill.skillId,
@@ -131,7 +128,6 @@ const PracticeView = ({
       timeTakenSeconds: duration,
     });
   };
-
 
   const handleNextQuestion = async () => {
     if (questionNumber >= totalQuestions) {
@@ -355,6 +351,7 @@ const PracticeView = ({
                   );
                 })}
               </div>
+
               {feedback && (
                 <div
                   className={`p-6 rounded-xl border ${
@@ -442,6 +439,16 @@ const PracticeView = ({
           </div>
         </div>
       </div>
+
+      {/* 🧮 Draggable Desmos calculator – only for math skills */}
+      <DesmosDraggable
+        show={
+          !!(
+            currentQuestion?.skillId?.startsWith('M_') ||
+            activeSkill?.skillId?.startsWith('M_')
+          )
+        }
+      />
     </div>
   );
 };
