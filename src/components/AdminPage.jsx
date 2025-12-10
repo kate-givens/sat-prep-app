@@ -5,8 +5,10 @@ import { APP_ID } from '../config/constants.js';
 import {
   fetchDraftQuestions,
   setQuestionStatus,
+  fetchFlaggedQuestions,
+  updateQuestionFields,
   fetchQuestionCountsBySkill,
-} from '../services/questionBankService';
+} from '../services/questionBankService.js';
 
 const AdminPage = ({ setView }) => {
   const { db, SKILLS } = useFirebase();
@@ -14,14 +16,15 @@ const AdminPage = ({ setView }) => {
 
   const [activeTab, setActiveTab] = useState('overview');
 
+  // ---------- Utility helpers ----------
+
   const getOptionText = (opt) => {
     if (typeof opt === 'string') return opt;
     if (!opt || typeof opt !== 'object') return String(opt ?? '');
     if (opt.text) return opt.text;
-    // fallback if the shape is weird
     return String(opt.label ?? '');
   };
-  // --- 1. DATA PROCESSING: Group Skills by Domain ---
+
   const groupSkillsByDomain = (skillsList) => {
     if (!skillsList) return {};
     return skillsList.reduce((acc, skill) => {
@@ -35,28 +38,28 @@ const AdminPage = ({ setView }) => {
   const groupedSkills = groupSkillsByDomain(SKILLS || []);
   const domains = Object.keys(groupedSkills).sort();
 
-  // --- STATE ---
+  // ---------- State ----------
 
-  // Seed State
+  // Seed patterns
   const [selectedSkill, setSelectedSkill] = useState(firstSkillId);
   const [context, setContext] = useState('');
   const [distractorLogic, setDistractorLogic] = useState('');
   const [status, setStatus] = useState('');
   const [seedDifficulty, setSeedDifficulty] = useState('Medium');
 
-  // Review State
+  // Review queue
   const [reviewSkillId, setReviewSkillId] = useState(firstSkillId);
   const [reviewDifficulty, setReviewDifficulty] = useState('Medium');
   const [reviewQuestions, setReviewQuestions] = useState([]);
   const [reviewStatus, setReviewStatus] = useState('');
   const [isLoadingReview, setIsLoadingReview] = useState(false);
 
-  // Stats State
+  // Stats overview
   const [skillCounts, setSkillCounts] = useState([]);
   const [isLoadingCounts, setIsLoadingCounts] = useState(false);
   const [countsStatus, setCountsStatus] = useState('');
 
-  // Manual Import State
+  // Manual import
   const [importSkillId, setImportSkillId] = useState(firstSkillId);
   const [importDifficulty, setImportDifficulty] = useState('Medium');
   const [importPassage, setImportPassage] = useState('');
@@ -66,7 +69,7 @@ const AdminPage = ({ setView }) => {
   const [importExplanation, setImportExplanation] = useState('');
   const [importStatus, setImportStatus] = useState('');
 
-  // Edit-in-place State (for review questions)
+  // Edit-in-place for review queue
   const [editingQuestionId, setEditingQuestionId] = useState(null);
   const [editForm, setEditForm] = useState({
     passageText: '',
@@ -77,17 +80,21 @@ const AdminPage = ({ setView }) => {
   });
   const [editStatus, setEditStatus] = useState('');
 
+  // Flagged questions tab
+  const [flaggedQuestions, setFlaggedQuestions] = useState([]);
+  const [isLoadingFlagged, setIsLoadingFlagged] = useState(false);
+  const [flaggedStatus, setFlaggedStatus] = useState('');
+
   // Keep initial skill-based state in sync once SKILLS loads
   useEffect(() => {
     if (!SKILLS?.length) return;
     const firstId = SKILLS[0].skillId;
-
     setSelectedSkill((prev) => prev || firstId);
     setReviewSkillId((prev) => prev || firstId);
     setImportSkillId((prev) => prev || firstId);
   }, [SKILLS]);
 
-  // --- HANDLERS ---
+  // ---------- Overview / counts ----------
 
   const loadSkillCounts = async () => {
     if (!db || !SKILLS?.length) return;
@@ -95,7 +102,6 @@ const AdminPage = ({ setView }) => {
     setCountsStatus('Refreshing...');
     try {
       const rawCounts = await fetchQuestionCountsBySkill(db, SKILLS);
-      // Attach name/domain from SKILLS metadata
       const countsWithMeta = rawCounts.map((c) => {
         const meta = SKILLS.find((s) => s.skillId === c.skillId) || {};
         return {
@@ -119,6 +125,8 @@ const AdminPage = ({ setView }) => {
       loadSkillCounts();
     }
   }, [db, SKILLS]);
+
+  // ---------- Seed patterns ----------
 
   const handleSaveSeed = async () => {
     if (!db) return;
@@ -148,6 +156,8 @@ const AdminPage = ({ setView }) => {
     }
   };
 
+  // ---------- Review queue (draft questions) ----------
+
   const loadDraftQuestions = async () => {
     if (!db) return;
     setIsLoadingReview(true);
@@ -174,7 +184,8 @@ const AdminPage = ({ setView }) => {
     }
   };
 
-  // Manual import handler
+  // ---------- Manual import ----------
+
   const handleManualImport = async () => {
     if (!db) return;
 
@@ -212,7 +223,8 @@ const AdminPage = ({ setView }) => {
     }
   };
 
-  // Editing handlers
+  // ---------- Edit-in-place for review queue ----------
+
   const startEditing = (q) => {
     setEditingQuestionId(q.id);
     setEditForm({
@@ -224,7 +236,6 @@ const AdminPage = ({ setView }) => {
     });
     setEditStatus('');
   };
-  
 
   const cancelEdit = () => {
     setEditingQuestionId(null);
@@ -280,7 +291,72 @@ const AdminPage = ({ setView }) => {
     }
   };
 
-  // --- REUSABLE UI COMPONENTS ---
+  // ---------- Flagged questions tab ----------
+
+  const loadFlaggedQuestions = async () => {
+    if (!db) return;
+    setIsLoadingFlagged(true);
+    setFlaggedStatus('Loading flagged questions...');
+    try {
+      const qs = await fetchFlaggedQuestions(db, 20);
+      setFlaggedQuestions(qs);
+      setFlaggedStatus(
+        qs.length
+          ? `Loaded ${qs.length} flagged question(s).`
+          : 'No flagged questions at the moment.'
+      );
+    } catch (e) {
+      console.error(e);
+      setFlaggedStatus('Error loading flagged questions. Check console.');
+    } finally {
+      setIsLoadingFlagged(false);
+      setTimeout(() => setFlaggedStatus(''), 4000);
+    }
+  };
+
+  const updateFlaggedLocal = (id, changes) => {
+    setFlaggedQuestions((prev) =>
+      prev.map((q) => (q.id === id ? { ...q, ...changes } : q))
+    );
+  };
+
+  const handleSaveEditedFlagged = async (q) => {
+    if (!db) return;
+    try {
+      await updateQuestionFields(db, q.id, {
+        passageText: q.passageText || '',
+        questionText: q.questionText || '',
+        options: q.options || [],
+        correctAnswer: q.correctAnswer || 'A',
+        explanation: q.explanation || '',
+        flagged: false,
+        status: 'approved',
+      });
+
+      setFlaggedStatus('Saved & approved question.');
+      setFlaggedQuestions((prev) => prev.filter((x) => x.id !== q.id));
+    } catch (e) {
+      console.error(e);
+      setFlaggedStatus('Error saving question. Check console.');
+    } finally {
+      setTimeout(() => setFlaggedStatus(''), 4000);
+    }
+  };
+
+  const handleRejectFlaggedQuestion = async (id) => {
+    if (!db) return;
+    try {
+      await updateQuestionFields(db, id, {
+        status: 'rejected',
+        flagged: false,
+      });
+      setFlaggedQuestions((prev) => prev.filter((q) => q.id !== id));
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // ---------- Reusable UI bits ----------
 
   const SidebarItem = ({ id, label }) => (
     <button
@@ -350,7 +426,8 @@ const AdminPage = ({ setView }) => {
     </div>
   );
 
-  // Loading gate if SKILLS not ready yet
+  // ---------- Loading gate ----------
+
   if (!SKILLS || !SKILLS.length) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#f3f4f6]">
@@ -360,6 +437,8 @@ const AdminPage = ({ setView }) => {
       </div>
     );
   }
+
+  // ---------- MAIN RENDER ----------
 
   return (
     <div className="min-h-screen bg-[#f3f4f6] flex font-sans">
@@ -374,6 +453,7 @@ const AdminPage = ({ setView }) => {
         <nav className="flex-1 px-4 py-6 space-y-2">
           <SidebarItem id="overview" label="Overview" />
           <SidebarItem id="review" label="Review Queue" />
+          <SidebarItem id="flagged" label="Flagged Questions" />
           <SidebarItem id="seed" label="Seed Patterns" />
           <SidebarItem id="import" label="Add Question" />
         </nav>
@@ -390,7 +470,7 @@ const AdminPage = ({ setView }) => {
 
       {/* Main Content */}
       <main className="flex-1 ml-64 p-8 max-w-7xl mx-auto">
-        {/* VIEW: OVERVIEW */}
+        {/* OVERVIEW */}
         {activeTab === 'overview' && (
           <div className="space-y-6">
             <div className="flex justify-between items-center">
@@ -433,55 +513,70 @@ const AdminPage = ({ setView }) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-  {skillCounts.map((s) => {
-    const easy = s.difficultyStatusBreakdown?.Easy;
-    const medium = s.difficultyStatusBreakdown?.Medium;
-    const hard = s.difficultyStatusBreakdown?.Hard;
+                  {skillCounts.map((s) => {
+                    const easy = s.difficultyStatusBreakdown?.Easy;
+                    const medium = s.difficultyStatusBreakdown?.Medium;
+                    const hard = s.difficultyStatusBreakdown?.Hard;
 
-    const formatBucket = (bucket) => {
-      if (!bucket) return '-';
-      if (bucket.total === 0) return '-';
-      // total (approved / draft)
-      return `${bucket.total} (${bucket.approved}✓ / ${bucket.draft}•)`;
-    };
+                    const formatBucket = (bucket) => {
+                      if (!bucket) return '-';
+                      if (bucket.total === 0) return '-';
+                      return `${bucket.total} (${bucket.approved}✓ / ${bucket.draft}•)`;
+                    };
 
-    return (
-      <tr key={s.skillId} className="hover:bg-gray-50 transition-colors">
-        <td className="px-6 py-4">
-          <p className="text-sm font-bold text-gray-800">{s.name}</p>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {s.domain || 'General'} •{' '}
-            <span className="font-mono">{s.skillId}</span>
-          </p>
-        </td>
-        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
-          {formatBucket(easy)}
-        </td>
-        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
-          {formatBucket(medium)}
-        </td>
-        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
-          {formatBucket(hard)}
-        </td>
-        <td className="px-6 py-4 text-right text-sm font-bold text-gray-900">
-          {s.totalCount}
-        </td>
-      </tr>
-    );
-  })}
-  {/* ...no-data row... */}
-</tbody>
-
+                    return (
+                      <tr
+                        key={s.skillId}
+                        className="hover:bg-gray-50 transition-colors"
+                      >
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-bold text-gray-800">
+                            {s.name}
+                          </p>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {s.domain || 'General'} •{' '}
+                            <span className="font-mono">{s.skillId}</span>
+                          </p>
+                        </td>
+                        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+                          {formatBucket(easy)}
+                        </td>
+                        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+                          {formatBucket(medium)}
+                        </td>
+                        <td className="px-4 py-4 text-right text-xs md:text-sm text-gray-600 font-medium">
+                          {formatBucket(hard)}
+                        </td>
+                        <td className="px-6 py-4 text-right text-sm font-bold text-gray-900">
+                          {s.totalCount}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                  {!skillCounts.length && (
+                    <tr>
+                      <td
+                        colSpan={5}
+                        className="px-6 py-6 text-center text-sm text-gray-400"
+                      >
+                        {countsStatus || 'No question data yet.'}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
               </table>
-              <p className="mt-2 text-[11px] text-gray-400">
-  Difficulty columns show: <span className="font-mono">total (approved✓ / draft•)</span>.
-</p>
-
+              <p className="mt-2 text-[11px] text-gray-400 px-6 pb-4">
+                Difficulty columns show:{' '}
+                <span className="font-mono">
+                  total (approved✓ / draft•)
+                </span>
+                .
+              </p>
             </div>
           </div>
         )}
 
-        {/* VIEW: SEED PATTERNS */}
+        {/* SEED PATTERNS */}
         {activeTab === 'seed' && (
           <div className="max-w-3xl mx-auto space-y-6">
             <h1 className="text-2xl font-bold text-gray-900">
@@ -507,7 +602,7 @@ const AdminPage = ({ setView }) => {
                 </label>
                 <textarea
                   className="w-full p-4 border border-gray-200 rounded-lg text-sm h-32 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                  placeholder="Enter the base context or question structure..."
+                  placeholder="Describe the generalized scenario, passage type, tone, and clue structure..."
                   value={context}
                   onChange={(e) => setContext(e.target.value)}
                 />
@@ -519,7 +614,7 @@ const AdminPage = ({ setView }) => {
                 </label>
                 <textarea
                   className="w-full p-4 border border-gray-200 rounded-lg text-sm h-32 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
-                  placeholder="Explain how incorrect answers should be generated..."
+                  placeholder="Explain how incorrect answers should be structured and why students might choose them..."
                   value={distractorLogic}
                   onChange={(e) => setDistractorLogic(e.target.value)}
                 />
@@ -542,7 +637,7 @@ const AdminPage = ({ setView }) => {
           </div>
         )}
 
-        {/* VIEW: MANUAL IMPORT */}
+        {/* MANUAL IMPORT */}
         {activeTab === 'import' && (
           <div className="max-w-3xl mx-auto space-y-6">
             <h1 className="text-2xl font-bold text-gray-900">Add Question</h1>
@@ -644,7 +739,7 @@ const AdminPage = ({ setView }) => {
           </div>
         )}
 
-        {/* VIEW: REVIEW QUEUE */}
+        {/* REVIEW QUEUE (drafts) */}
         {activeTab === 'review' && (
           <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col">
             <div className="flex justify-between items-end bg-white p-6 rounded-xl shadow-sm border border-gray-200">
@@ -766,27 +861,30 @@ const AdminPage = ({ setView }) => {
                     {!isEditing ? (
                       <div className="space-y-2 mb-6">
                         {q.options?.map((opt, i) => {
-  const letter = String.fromCharCode(65 + i);
-  const isCorrect = letter === q.correctAnswer;
-  const optionText = getOptionText(opt);
+                          const letter = String.fromCharCode(65 + i);
+                          const isCorrect = letter === q.correctAnswer;
+                          const optionText = getOptionText(opt);
 
-  return (
-    <div 
-      key={letter} 
-      className={`flex p-3 rounded-lg text-sm transition-colors ${
-        isCorrect 
-          ? 'bg-green-50 border border-green-200 text-green-900 font-medium' 
-          : 'bg-white border border-gray-200 text-gray-600'
-      }`}
-    >
-      <span className={`font-mono font-bold mr-3 ${isCorrect ? 'text-green-700' : 'text-gray-400'}`}>
-        {letter}.
-      </span>
-      <span>{optionText}</span>
-    </div>
-  );
-})}
-
+                          return (
+                            <div
+                              key={letter}
+                              className={`flex p-3 rounded-lg text-sm transition-colors ${
+                                isCorrect
+                                  ? 'bg-green-50 border border-green-200 text-green-900 font-medium'
+                                  : 'bg-white border border-gray-200 text-gray-600'
+                              }`}
+                            >
+                              <span
+                                className={`font-mono font-bold mr-3 ${
+                                  isCorrect ? 'text-green-700' : 'text-gray-400'
+                                }`}
+                              >
+                                {letter}.
+                              </span>
+                              <span>{optionText}</span>
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
@@ -895,7 +993,170 @@ const AdminPage = ({ setView }) => {
                   </div>
                 );
               })}
-              
+            </div>
+          </div>
+        )}
+
+        {/* FLAGGED QUESTIONS */}
+        {activeTab === 'flagged' && (
+          <div className="space-y-6 h-[calc(100vh-8rem)] flex flex-col">
+            <div className="flex justify-between items-center bg-white p-6 rounded-xl shadow-sm border border-gray-200">
+              <div>
+                <h1 className="text-xl font-bold text-gray-900">
+                  Flagged Questions
+                </h1>
+                <p className="text-sm text-gray-500">
+                  Questions students flagged as confusing, buggy, or unfair.
+                </p>
+              </div>
+              <button
+                onClick={loadFlaggedQuestions}
+                disabled={isLoadingFlagged}
+                className="px-6 py-3 bg-gray-900 text-white text-sm font-bold rounded-lg hover:bg-black transition-all shadow-md h-fit"
+              >
+                {isLoadingFlagged ? 'Loading…' : 'Load Flagged'}
+              </button>
+            </div>
+
+            {flaggedStatus && (
+              <p className="text-xs text-gray-500">{flaggedStatus}</p>
+            )}
+
+            <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
+              {!flaggedQuestions.length && !isLoadingFlagged && (
+                <div className="h-64 flex items-center justify-center text-gray-400 text-sm">
+                  No flagged questions.
+                </div>
+              )}
+
+              {flaggedQuestions.map((q) => (
+                <div
+                  key={q.id}
+                  className="bg-white rounded-xl p-6 shadow-sm border border-gray-200 hover:shadow-md transition-shadow"
+                >
+                  <div className="flex justify-between items-start mb-3">
+                    <div className="space-y-1">
+                      <div className="flex gap-2">
+                        <span className="px-2 py-1 rounded bg-gray-100 text-gray-600 text-[10px] font-bold uppercase tracking-wider">
+                          {q.skillId}
+                        </span>
+                        <span
+                          className={`px-2 py-1 rounded text-[10px] font-bold uppercase tracking-wider ${
+                            q.difficulty === 'Hard'
+                              ? 'bg-red-50 text-red-700'
+                              : q.difficulty === 'Medium'
+                              ? 'bg-amber-50 text-amber-700'
+                              : 'bg-green-50 text-green-700'
+                          }`}
+                        >
+                          {q.difficulty}
+                        </span>
+                      </div>
+                      {q.flagReason && (
+                        <p className="text-[11px] text-red-500">
+                          Student note: {q.flagReason}
+                        </p>
+                      )}
+                    </div>
+
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleRejectFlaggedQuestion(q.id)}
+                        className="px-3 py-1 text-[11px] font-bold text-red-600 border border-red-100 rounded-lg hover:bg-red-50"
+                      >
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => handleSaveEditedFlagged(q)}
+                        className="px-3 py-1 text-[11px] font-bold text-green-600 border border-green-100 rounded-lg hover:bg-green-50"
+                      >
+                        Approve
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Editable fields for flagged question */}
+                  {q.passageText !== undefined && (
+                    <div className="space-y-1.5 mb-3">
+                      <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                        Passage (optional)
+                      </label>
+                      <textarea
+                        className="w-full p-3 border border-gray-200 rounded-lg text-xs h-20 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                        value={q.passageText || ''}
+                        onChange={(e) =>
+                          updateFlaggedLocal(q.id, {
+                            passageText: e.target.value,
+                          })
+                        }
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5 mb-3">
+                    <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                      Question Text
+                    </label>
+                    <textarea
+                      className="w-full p-3 border border-gray-200 rounded-lg text-xs h-20 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                      value={q.questionText || ''}
+                      onChange={(e) =>
+                        updateFlaggedLocal(q.id, {
+                          questionText: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-3">
+                    {['A', 'B', 'C', 'D'].map((letter, idx) => (
+                      <div key={letter} className="space-y-1.5">
+                        <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                          Choice {letter}
+                        </label>
+                        <input
+                          type="text"
+                          className="w-full p-3 border border-gray-200 rounded-lg text-xs focus:ring-2 focus:ring-blue-500 outline-none"
+                          value={(q.options && q.options[idx]) || ''}
+                          onChange={(e) => {
+                            const next = [...(q.options || ['', '', '', ''])];
+                            next[idx] = e.target.value;
+                            updateFlaggedLocal(q.id, { options: next });
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="flex items-center gap-4 mb-3">
+                    <SimpleSelect
+                      label="Correct Answer"
+                      value={q.correctAnswer || 'A'}
+                      onChange={(e) =>
+                        updateFlaggedLocal(q.id, {
+                          correctAnswer: e.target.value,
+                        })
+                      }
+                      options={['A', 'B', 'C', 'D']}
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-bold text-gray-500 uppercase tracking-wider">
+                      Explanation (optional)
+                    </label>
+                    <textarea
+                      className="w-full p-3 border border-gray-200 rounded-lg text-xs h-20 focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                      value={q.explanation || ''}
+                      onChange={(e) =>
+                        updateFlaggedLocal(q.id, {
+                          explanation: e.target.value,
+                        })
+                      }
+                    />
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         )}

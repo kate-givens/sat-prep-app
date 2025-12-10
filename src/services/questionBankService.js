@@ -1,14 +1,14 @@
 // src/services/questionBankService.js
 import {
   collection,
+  doc,
   addDoc,
+  getDocs,
   query,
   where,
   limit,
-  getDocs,
-  doc,
   updateDoc,
-  getCountFromServer,
+  orderBy,
 } from 'firebase/firestore';
 import { APP_ID } from '../config/constants';
 import { generateSATQuestion } from './aiEngine';
@@ -118,21 +118,25 @@ export const fetchDraftQuestions = async (
 /**
  * Approve or reject a question
  */
-export const setQuestionStatus = async (db, questionId, status) => {
-  if (!db) return;
-
-  const questionRef = doc(
+export const setQuestionStatus = async (db, id, status) => {
+  const ref = doc(
     db,
     'artifacts',
     APP_ID,
     'public',
     'data',
     'questionBank',
-    questionId
+    id
   );
 
-  await updateDoc(questionRef, { status });
+  await updateDoc(ref, {
+    status,
+    // Clear flag unless we’re explicitly setting to 'flagged'
+    flagged: status === 'flagged',
+    updatedAt: new Date(),
+  });
 };
+
 
 /**
  * Fetch questions for practice (approved only), with difficulty fallback logic
@@ -255,4 +259,42 @@ export const fetchQuestionCountsBySkill = async (db, skills = []) => {
   });
 
   return Array.from(countsBySkill.values());
-};
+}; 
+  export const fetchFlaggedQuestions = async (db, limitCount = 20) => {
+    const colRef = collection(
+      db,
+      'artifacts',
+      APP_ID,
+      'public',
+      'data',
+      'questionBank'
+    );
+  
+    const q = query(
+      colRef,
+      where('flagged', '==', true),
+      orderBy('flaggedAt', 'desc'),
+      limit(limitCount)
+    );
+  
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({
+      id: d.id,
+      ...d.data(),
+    }));
+  };
+  export const updateQuestionFields = async (db, id, updates) => {
+    const ref = doc(
+      db,
+      'artifacts',
+      APP_ID,
+      'public',
+      'data',
+      'questionBank',
+      id
+    );
+    await updateDoc(ref, {
+      ...updates,
+      updatedAt: new Date(),
+    });
+  };
