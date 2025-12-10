@@ -4,7 +4,7 @@ import { useFirebase } from '../context/FirebaseContext';
 import { BRAND_BLUE } from '../config/constants';
 
 const LoginScreen = () => {
-  const { loginAsStudent, loginAsDemo, loginWithEmail, signupWithEmail } = useFirebase();
+  const { loginWithEmail, signupWithEmail } = useFirebase();
   const [mode, setMode] = useState('menu');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -21,11 +21,6 @@ const LoginScreen = () => {
       setError(e.message);
       setIsLoading(false);
     }
-  };
-
-  const handleDemo = async () => {
-    setIsLoading(true);
-    await loginAsDemo();
   };
 
   if (mode === 'admin') return <AdminPage setView={setMode} />;
@@ -54,10 +49,10 @@ const LoginScreen = () => {
               </svg>
             </div>
             <h1 className="text-3xl font-light text-white tracking-wide font-['Montserrat']">
-              SAT<span className="font-semibold">PREP</span>.AI
+              SAT<span className="font-semibold">PREP</span>
             </h1>
             <p className="text-white/80 mt-2 text-sm font-light">
-              Adaptive Intelligence for Mastery
+              Targeted Practice for Mastery.
             </p>
           </div>
           <div className="p-8 space-y-4 bg-white">
@@ -73,21 +68,7 @@ const LoginScreen = () => {
             >
               Sign Up
             </button>
-            <div className="relative py-2">
-              <div className="absolute inset-0 flex items-center">
-                <div className="w-full border-t border-gray-100"></div>
-              </div>
-              <div className="relative flex justify-center text-xs uppercase tracking-widest">
-                <span className="px-2 bg-white text-gray-400">Or</span>
-              </div>
-            </div>
-            <button
-              onClick={handleDemo}
-              disabled={isLoading}
-              className="w-full py-4 px-6 bg-gray-800 text-white font-medium rounded-xl hover:bg-gray-900 transition-all flex items-center justify-center"
-            >
-              <span className="mr-2">🚀</span> Try Demo Mode
-            </button>
+
             <div className="text-center pt-2">
               <button
                 onClick={() => setMode('admin')}
