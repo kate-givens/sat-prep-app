@@ -3,7 +3,9 @@ import MathText from './MathText';
 import { addDoc, collection, doc, updateDoc} from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
-import DesmosDraggable from './DesmosDraggable';
+import DesmosPanel from './DesmosPanel';
+
+
 
 const PracticeView = ({
   activeSkill,
@@ -408,6 +410,9 @@ const PracticeView = ({
                   );
                 })}
               </div>
+              {/* DESMOS: only show for math skills (skillId starts with "M_") */}
+
+              {currentQuestion?.skillId?.startsWith('M_') && <DesmosPanel />}
 
               {feedback && (
                 <div
