@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import MathText from './MathText';
-import { addDoc, collection } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc} from 'firebase/firestore';
 import { useFirebase } from '../context/FirebaseContext.jsx';
 import { APP_ID } from '../config/constants.js';
 import DesmosDraggable from './DesmosDraggable';
@@ -18,6 +18,8 @@ const PracticeView = ({
 }) => {
   const { db, userId } = useFirebase(); // 🔹 pull db + userId from context
 
+  const [flagStatus, setFlagStatus] = useState('');
+  const [isFlagging, setIsFlagging] = useState(false);
   const [currentQuestion, setCurrentQuestion] = useState(null);
   const [userAnswer, setUserAnswer] = useState(null);
   const [feedback, setFeedback] = useState(null);
@@ -67,7 +69,41 @@ const PracticeView = ({
       console.error('Error logging question result:', err);
     }
   };
-
+  const handleFlagQuestion = async () => {
+    if (!db || !currentQuestion?.id) {
+      setFlagStatus('Cannot flag: missing question id.');
+      setTimeout(() => setFlagStatus(''), 2500);
+      return;
+    }
+  
+    setIsFlagging(true);
+    try {
+      await updateDoc(
+        doc(
+          db,
+          'artifacts',
+          APP_ID,
+          'public',
+          'data',
+          'questionBank',
+          currentQuestion.id
+        ),
+        {
+          flagged: true,
+          flaggedAt: new Date(),
+          flaggedBy: userId || null,
+        }
+      );
+      setFlagStatus('Question flagged for review.');
+    } catch (err) {
+      console.error('Error flagging question:', err);
+      setFlagStatus('Error flagging question.');
+    } finally {
+      setIsFlagging(false);
+      setTimeout(() => setFlagStatus(''), 3000);
+    }
+  };
+  
   // Initialize from bank questions
   useEffect(() => {
     if (activeSkill && initialQuestions && initialQuestions.length > 0) {
@@ -266,17 +302,38 @@ const PracticeView = ({
   return (
     <div className="max-w-7xl mx-auto p-6 animate-fade-in-up">
       <div className="mb-6 flex justify-between items-center">
-        <button
-          onClick={() => setView('overview')}
-          className="text-gray-400 hover:text-gray-600 transition-colors text-sm font-medium"
-        >
-          Exit
-        </button>
-        <div className="text-xs font-bold text-[#1e82ff] bg-blue-50 px-3 py-1 rounded-full uppercase tracking-widest">
-          {isDailySession ? 'Daily Goal' : 'Practice Set'} • {questionNumber} /
-          {totalQuestions}
-        </div>
-      </div>
+  <button
+    onClick={() => setView('overview')}
+    className="text-gray-400 hover:text-gray-600 transition-colors text-sm font-medium"
+  >
+    Exit
+  </button>
+
+  <div className="flex items-center gap-3">
+    {flagStatus && (
+      <span className="text-[11px] text-gray-400">
+        {flagStatus}
+      </span>
+    )}
+
+    {currentQuestion?.id && (
+      <button
+        type="button"
+        onClick={handleFlagQuestion}
+        disabled={isFlagging}
+        className="text-[11px] px-3 py-1 rounded-full border border-red-200 text-red-500 hover:bg-red-50 disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {isFlagging ? 'Flagging…' : 'Flag Question'}
+      </button>
+    )}
+
+    <div className="text-xs font-bold text-[#1e82ff] bg-blue-50 px-3 py-1 rounded-full uppercase tracking-widest">
+      {isDailySession ? 'Daily Goal' : 'Practice Set'} • {questionNumber} /
+      {totalQuestions}
+    </div>
+  </div>
+</div>
+
 
       <div className="bg-white rounded-2xl shadow-xl shadow-gray-200/40 border border-gray-100 overflow-hidden min-h-[600px] flex flex-col relative">
         <div className="flex-1 flex flex-col lg:flex-row h-full">
