@@ -1,8 +1,9 @@
 // src/pages/DiagnosticPage.jsx
 import React, { useState, useEffect, useCallback } from 'react';
-import { doc, onSnapshot } from 'firebase/firestore';
+import { doc, onSnapshot, updateDoc } from 'firebase/firestore';
 import MathText from '../components/MathText.jsx';
 import { useFirebase } from '../context/FirebaseContext.jsx';
+
 import {
   startMathModule,
   scoreMathResponse,
@@ -10,7 +11,7 @@ import {
   finalizeRoutingOnSubmit,
   getUnansweredQuestions,
   handleRoutingTimeout,
-  finalizeStage2Diagnostic,
+  finalizeStage2AndComputeMastery,
 } from '../services/mathDiagnosticService.js';
 
 import { BRAND_BLUE, APP_ID } from '../config/constants.js';
@@ -22,17 +23,20 @@ import {
 const MODULE_DUR_SEC = 20 * 60; // 20 minutes per module
 
 const DiagnosticPage = () => {
-  const { db, userId, logout } = useFirebase();
+  const { db, userId, userProfile, logout } = useFirebase();
 
   const [moduleName, setModuleName] = useState('Routing'); // "Routing" | "Stage2_Easy" | "Stage2_Medium" | "Stage2_Hard"
-  const [questions, setQuestions] = useState([]); // questions for current module
+  const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [selectedChoices, setSelectedChoices] = useState({}); // questionId -> "A"|"B"|"C"|"D"|null
+  const [selectedChoices, setSelectedChoices] = useState({});
   const [remainingSeconds, setRemainingSeconds] = useState(MODULE_DUR_SEC);
   const [diagDoc, setDiagDoc] = useState(null);
   const [isSubmittingModule, setIsSubmittingModule] = useState(false);
 
-  // Load questions based on moduleName
+  const [showSummary, setShowSummary] = useState(false);
+  const [summaryData, setSummaryData] = useState(null); // { skillStats, masteryBySkillId, recommendedSkills, skillMastery, dailySkillId }
+
+  // 1) Load questions when moduleName changes
   useEffect(() => {
     if (moduleName === 'Routing') {
       setQuestions(mathRoutingModuleQuestions);
@@ -45,24 +49,7 @@ const DiagnosticPage = () => {
     setSelectedChoices({});
   }, [moduleName]);
 
-  useEffect(() => {
-    if (!diagDoc || !questions.length) return;
-  
-    const moduleResponses = (diagDoc.responses || []).filter(
-      (r) => r.module === moduleName
-    );
-  
-    const initialSelected = {};
-    for (const r of moduleResponses) {
-      if (r.selectedChoiceLabel != null) {
-        initialSelected[r.questionId] = r.selectedChoiceLabel;
-      }
-    }
-    setSelectedChoices(initialSelected);
-  }, [diagDoc, questions, moduleName]);
-  
-
-  // Subscribe to math diagnostic doc (for timer + unanswered checks)
+  // 2) Subscribe to diagnostic doc (timer + responses)
   useEffect(() => {
     if (!db || !userId) return;
 
@@ -95,20 +82,38 @@ const DiagnosticPage = () => {
     return () => unsub();
   }, [db, userId, moduleName]);
 
-  // Start Routing module timer on first load
+  // 3) Prefill selected choices from saved responses
+  useEffect(() => {
+    if (!diagDoc || !questions.length) return;
+
+    const moduleResponses = (diagDoc.responses || []).filter(
+      (r) => r.module === moduleName
+    );
+
+    const initialSelected = {};
+    for (const r of moduleResponses) {
+      if (r.selectedChoiceLabel != null) {
+        initialSelected[r.questionId] = r.selectedChoiceLabel;
+      }
+    }
+    setSelectedChoices(initialSelected);
+  }, [diagDoc, questions, moduleName]);
+
+  // 4) Start Routing module timer on first load
   useEffect(() => {
     if (!db || !userId) return;
     if (moduleName === 'Routing') {
-      startMathModule(db, userId, 'Routing', MODULE_DUR_SEC).catch(console.error);
+      startMathModule(db, userId, 'Routing', MODULE_DUR_SEC).catch(
+        console.error
+      );
     }
   }, [db, userId, moduleName]);
 
-  // Handle timeout logic
+  // 5) Handle timeout logic
   const handleModuleTimeout = useCallback(async () => {
     if (!db || !userId) return;
     try {
       if (moduleName === 'Routing') {
-        // route to Stage 2
         const { stage2ModuleId } = await handleRoutingTimeout(db, userId);
         if (stage2ModuleId) {
           setModuleName(stage2ModuleId);
@@ -116,15 +121,20 @@ const DiagnosticPage = () => {
           setRemainingSeconds(MODULE_DUR_SEC);
         }
       } else if (moduleName.startsWith('Stage2_')) {
-        await finalizeStage2Diagnostic(db, userId, { timedOut: true });
-        console.log('Stage 2 timed out – diagnostic finalized.');
+        const result = await finalizeStage2AndComputeMastery(
+          db,
+          userId,
+          moduleName
+        );
+        setSummaryData(result);
+        setShowSummary(true);
       }
     } catch (err) {
       console.error('Error handling module timeout:', err);
     }
   }, [db, userId, moduleName]);
 
-  // Local countdown timer
+  // 6) Local countdown timer
   useEffect(() => {
     if (remainingSeconds <= 0) return;
     const intervalId = setInterval(() => {
@@ -140,7 +150,7 @@ const DiagnosticPage = () => {
     return () => clearInterval(intervalId);
   }, [remainingSeconds, handleModuleTimeout]);
 
-  // Handle answer choice select
+  // 7) Handle answer select
   const handleSelectChoice = async (choiceLabel) => {
     const question = questions[currentIndex];
     if (!question || !db || !userId) return;
@@ -163,7 +173,7 @@ const DiagnosticPage = () => {
     }
   };
 
-  // Navigation
+  // 8) Navigation
   const goNext = () => {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex((i) => i + 1);
@@ -176,7 +186,7 @@ const DiagnosticPage = () => {
     }
   };
 
-  // Submit module (Routing or Stage 2)
+  // 9) Submit module
   const handleSubmitModule = async () => {
     if (!db || !userId || !questions.length) return;
 
@@ -184,7 +194,11 @@ const DiagnosticPage = () => {
     const questionIds = questions.map((q) => q.questionId);
     const responses = diagDoc?.responses || [];
 
-    const unanswered = getUnansweredQuestions(questionIds, responses, moduleName);
+    const unanswered = getUnansweredQuestions(
+      questionIds,
+      responses,
+      moduleName
+    );
 
     if (unanswered.length > 0) {
       const ok = window.confirm(
@@ -205,8 +219,13 @@ const DiagnosticPage = () => {
           setRemainingSeconds(MODULE_DUR_SEC);
         }
       } else if (moduleName.startsWith('Stage2_')) {
-        await finalizeStage2Diagnostic(db, userId, { timedOut: false });
-        console.log('Stage 2 submitted – diagnostic finalized.');
+        const result = await finalizeStage2AndComputeMastery(
+          db,
+          userId,
+          moduleName
+        );
+        setSummaryData(result);
+        setShowSummary(true);
       }
     } catch (err) {
       console.error('Error submitting module:', err);
@@ -215,7 +234,7 @@ const DiagnosticPage = () => {
     }
   };
 
-  // Derived UI data
+  // 10) Derived UI data
   const currentQuestion = questions[currentIndex] || null;
   const selected =
     currentQuestion && selectedChoices[currentQuestion.questionId] != null
@@ -228,17 +247,127 @@ const DiagnosticPage = () => {
   const seconds = remainingSeconds % 60;
   const timeLabel = `${minutes}:${seconds.toString().padStart(2, '0')}`;
 
+  // If the diagnostic is already completed in Firestore and the user hasn't
+// acknowledged the summary yet, show the summary (survives refresh/remount).
+useEffect(() => {
+  if (!diagDoc) return;
+
+  const summarySeen =
+    !!userProfile?.diagnosticMathSummarySeen || !!userProfile?.hasTakenDiagnostic;
+
+  if (diagDoc.status === 'completed' && !summarySeen) {
+    if (diagDoc.recommendedSkills && diagDoc.skillStats) {
+      setSummaryData({
+        recommendedSkills: diagDoc.recommendedSkills,
+        skillStats: diagDoc.skillStats,
+        masteryBySkillId: diagDoc.masteryBySkillId || {},
+      });
+      setShowSummary(true);
+    }
+  }
+}, [diagDoc, userProfile]);
+
+  // 11) SUMMARY RENDER (after all hooks)
+  if (showSummary && summaryData) {
+    const { recommendedSkills, skillStats } = summaryData;
+
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center p-6">
+        <div className="w-full max-w-3xl bg-white shadow-xl shadow-gray-200/50 rounded-2xl border border-gray-100 p-10">
+          <h2 className="text-gray-900 font-serif text-2xl mb-2">
+            Diagnostic Summary
+          </h2>
+          <p className="text-gray-500 text-sm mb-8">
+            Temporary summary. Your mastery has been saved, and your Daily 5
+            skill is ready on the dashboard.
+          </p>
+
+          <div className="mb-8">
+            <h3 className="text-gray-700 text-xs tracking-widest uppercase font-semibold mb-3">
+              Recommended Practice Skills
+            </h3>
+            {recommendedSkills?.length ? (
+              <div className="flex flex-wrap gap-2">
+                {recommendedSkills.map((s) => (
+                  <span
+                    key={s}
+                    className="px-3 py-1 rounded-full text-xs bg-gray-100 text-gray-700"
+                  >
+                    {s}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <p className="text-gray-400 text-sm">
+                No specific recommendations found.
+              </p>
+            )}
+          </div>
+
+          <div className="mb-10">
+            <h3 className="text-gray-700 text-xs tracking-widest uppercase font-semibold mb-3">
+              Mastery by Skill (preview)
+            </h3>
+            <div className="space-y-2 max-h-64 overflow-auto pr-2">
+              {skillStats.slice(0, 12).map((row) => (
+                <div
+                  key={row.skillId}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl border border-gray-100"
+                >
+                  <div className="text-sm text-gray-700">{row.skillId}</div>
+                  <div className="text-xs text-gray-500">
+                    {row.masteryLevel} ·{' '}
+                    {Math.round(row.pointsAccuracy * 100)}% ({row.correct}/
+                    {row.total})
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              onClick={async () => {
+                try {
+                  const profileRef = doc(
+                    db,
+                    'artifacts',
+                    APP_ID,
+                    'users',
+                    userId,
+                    'profile',
+                    'data'
+                  );
+                  await updateDoc(profileRef, {
+                    diagnosticMathSummarySeen: true,
+                  });
+                } catch (e) {
+                  console.error('Error marking diagnostic summary seen:', e);
+                }
+              }}
+              
+              className="px-6 py-3 rounded-full bg-[#1e82ff] text-white text-sm font-semibold tracking-widest uppercase hover:bg-[#1663c3] transition-colors"
+            >
+              Go to Practice Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // 12) MAIN DIAGNOSTIC RENDER
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-6">
       {/* Header */}
-      <div className="w-full max-w-3xl flex justify-between items-center mb-6">
+      <div className="w-full max-w-3xl flex justify-between itemscenter mb-6">
         <div className="flex flex-col">
           <h2 className="text-gray-400 text-xs tracking-widest uppercase font-semibold">
             Math Diagnostic
           </h2>
           <p className="text-sm font-medium text-[#1e82ff]">
-            {moduleName === 'Routing' ? 'Routing Module' : 'Stage 2 Module'} ·
-            {' '}Question {currentIndex + 1} of {totalQuestions}
+            {moduleName === 'Routing' ? 'Routing Module' : 'Stage 2 Module'} ·{' '}
+            Question {currentIndex + 1} of {totalQuestions}
           </p>
         </div>
         <div className="flex items-center gap-4">
@@ -292,7 +421,6 @@ const DiagnosticPage = () => {
                   const letter = choice.label;
                   const isSelected = selected === letter;
 
-                  // SAT-style: no correct/incorrect feedback during diagnostic
                   const stateStyle = isSelected
                     ? 'bg-[#1e82ff]/5 border-[#1e82ff] text-[#1e82ff]'
                     : 'bg-white border-gray-200 text-gray-600 hover:border-[#1e82ff] hover:text-[#1e82ff] hover:bg-[#1e82ff]/5';
@@ -304,7 +432,7 @@ const DiagnosticPage = () => {
                       onClick={() => handleSelectChoice(letter)}
                     >
                       <div className="flex items-center">
-                        <span className="flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full border text-sm font-serif mr-4 border-current opacity-60">
+                        <span className="flex-shrink-0 w-8 h-8 flex itemscenter justify-center rounded-full border text-sm font-serif mr-4 border-current opacity-60">
                           {letter}
                         </span>
                         <span className="font-serif text-lg leading-snug">
@@ -317,36 +445,35 @@ const DiagnosticPage = () => {
               </div>
 
               {/* Navigation / Submit */}
-              {/* Navigation buttons */}
-<div className="flex items-center justify-between mt-6">
-  <button
-    onClick={goPrev}
-    disabled={currentIndex === 0}
-    className="px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
-  >
-    Previous
-  </button>
+              <div className="flex items-center justify-between mt-6">
+                <button
+                  onClick={goPrev}
+                  disabled={currentIndex === 0}
+                  className="px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Previous
+                </button>
 
-  <button
-    onClick={goNext}
-    disabled={currentIndex === totalQuestions - 1}
-    className="px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
-  >
-    Next
-  </button>
-</div>
+                <button
+                  onClick={goNext}
+                  disabled={currentIndex === totalQuestions - 1}
+                  className="px-4 py-2 text-xs font-semibold uppercase tracking-widest text-gray-400 hover:text-gray-700 disabled:opacity-30 disabled:cursor-not-allowed"
+                >
+                  Next
+                </button>
+              </div>
 
-{/* Submit button on its own line */}
-<div className="flex justify-center mt-8">
-  <button
-    onClick={handleSubmitModule}
-    disabled={isSubmittingModule}
-    className="px-6 py-3 text-sm font-semibold uppercase tracking-widest rounded-full bg-[#1e82ff] text-white hover:bg-[#1663c3] disabled:opacity-50 shadow-md"
-  >
-    {moduleName === 'Routing' ? 'Submit Routing' : 'Submit Stage 2'}
-  </button>
-</div>
-
+              <div className="flex justify-center mt-8">
+                <button
+                  onClick={handleSubmitModule}
+                  disabled={isSubmittingModule}
+                  className="px-6 py-3 text-sm font-semibold uppercase tracking-widest rounded-full bg-[#1e82ff] text-white hover:bg-[#1663c3] disabled:opacity-50 shadow-md"
+                >
+                  {moduleName === 'Routing'
+                    ? 'Submit Routing'
+                    : 'Submit Stage 2'}
+                </button>
+              </div>
             </div>
           )}
         </div>

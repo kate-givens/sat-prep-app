@@ -13,66 +13,6 @@ export const MATH_STAGE2_MODULES = {
   Medium: 'Stage2_Medium',
   Hard: 'Stage2_Hard',
 };
-/**
- * Finalize Stage 2 (either on submit or timeout).
- * Marks the diagnostic as completed and computes a simple summary.
- */
-export async function finalizeStage2Diagnostic(db, userId, { timedOut = false } = {}) {
-  if (!db || !userId) return;
-
-  const diagRef = getMathDiagnosticRef(db, userId);
-  const snapshot = await getDoc(diagRef);
-
-  if (!snapshot.exists()) {
-    throw new Error(`Math diagnostic not initialized for user ${userId}`);
-  }
-
-  const data = snapshot.data();
-  const responses = Array.isArray(data.responses) ? data.responses : [];
-
-  // Only look at Math / Stage2_* responses
-  const stage2Responses = responses.filter(
-    (r) => r.section === 'Math' && String(r.module || '').startsWith('Stage2_')
-  );
-
-  const totalQuestions = stage2Responses.length || 0;
-  const totalCorrect = stage2Responses.filter((r) => r.isCorrect).length;
-  const totalPointsEarned = stage2Responses.reduce((sum, r) => sum + (r.pointsEarned || 0), 0);
-  const totalPointsPossible = stage2Responses.reduce(
-    (sum, r) => sum + (r.pointsPossible || 0),
-    0
-  );
-
-  const percentCorrect = totalQuestions
-    ? Math.round((totalCorrect / totalQuestions) * 100)
-    : 0;
-
-  // Super simple “mastery” buckets for now; you can refine later
-  let overallBand = 'Developing';
-  if (percentCorrect >= 80) overallBand = 'Strong';
-  else if (percentCorrect >= 60) overallBand = 'Proficient';
-
-  await updateDoc(diagRef, {
-    status: 'completed',
-    currentModule: null,
-    currentModuleStartedAt: null,
-    currentModuleDurationSec: null,
-    currentModuleExpiresAt: null,
-    summary: {
-      ...(data.summary || {}),
-      stage2: {
-        timedOut,
-        completedAt: serverTimestamp(),
-        totalQuestions,
-        totalCorrect,
-        totalPointsEarned,
-        totalPointsPossible,
-        percentCorrect,
-        overallBand,
-      },
-    },
-  });
-}
 
 /**
  * Start (or restart) a math module timer for a user.
@@ -87,7 +27,8 @@ export async function startMathModule(db, userId, moduleName, durationSec = 20 *
   const now = new Date();
   const expiresAt = new Date(now.getTime() + durationSec * 1000);
 
-  const status = moduleName === 'Routing' ? 'routing_in_progress' : 'stage2_in_progress';
+  const status =
+    moduleName === 'Routing' ? 'routing_in_progress' : 'stage2_in_progress';
 
   if (!snap.exists()) {
     // First time: create the diagnostic doc
@@ -130,8 +71,6 @@ export function scoreMathResponse(question, answer) {
 
   const pointsPossible = (question.scoring && question.scoring.points) || 1;
   const pointsEarned = isCorrect ? pointsPossible : 0;
-
-  
 
   return {
     questionId: question.questionId,
@@ -205,7 +144,9 @@ export async function saveMathResponse(db, userId, scoredResponse) {
  * Used for the "review" screen before submit.
  */
 export function getUnansweredQuestions(moduleQuestionIds, responses, moduleName) {
-  const moduleResponses = (responses || []).filter((r) => r.module === moduleName);
+  const moduleResponses = (responses || []).filter(
+    (r) => r.module === moduleName
+  );
   const byId = new Map();
 
   for (const r of moduleResponses) {
@@ -357,4 +298,217 @@ export async function finalizeRoutingOnSubmit(db, userId) {
   });
 
   return { route, stage2ModuleId, stats };
+}
+
+// --- Mastery helpers ---
+export const MASTERY_LEVELS = {
+  MASTERY: 'Mastery',
+  PROFICIENT: 'Proficient',
+  DEVELOPING: 'Developing',
+  NEEDS_HELP: 'Needs Help',
+};
+
+function levelFromAccuracy(acc) {
+  if (acc >= 0.8) return MASTERY_LEVELS.MASTERY;
+  if (acc >= 0.6) return MASTERY_LEVELS.PROFICIENT;
+  if (acc >= 0.4) return MASTERY_LEVELS.DEVELOPING;
+  return MASTERY_LEVELS.NEEDS_HELP;
+}
+
+function computeSkillStats(responses) {
+  // responses already filtered to Math + answered questions
+  const bySkill = new Map();
+
+  for (const r of responses) {
+    const skillId = r.skillId || 'UNKNOWN';
+    if (!bySkill.has(skillId)) {
+      bySkill.set(skillId, {
+        correct: 0,
+        total: 0,
+        pointsEarned: 0,
+        pointsPossible: 0,
+      });
+    }
+    const s = bySkill.get(skillId);
+    s.total += 1;
+    s.correct += r.isCorrect ? 1 : 0;
+    s.pointsEarned += r.pointsEarned ?? 0;
+    s.pointsPossible += r.pointsPossible ?? 1;
+  }
+
+  const stats = [];
+  for (const [skillId, s] of bySkill.entries()) {
+    const acc = s.total > 0 ? s.correct / s.total : 0;
+    const ptsAcc = s.pointsPossible > 0 ? s.pointsEarned / s.pointsPossible : acc;
+
+    stats.push({
+      skillId,
+      correct: s.correct,
+      total: s.total,
+      accuracy: Number(acc.toFixed(3)),
+      pointsAccuracy: Number(ptsAcc.toFixed(3)),
+      masteryLevel: levelFromAccuracy(ptsAcc),
+    });
+  }
+
+  // weakest first
+  stats.sort((a, b) => a.pointsAccuracy - b.pointsAccuracy);
+  return stats;
+}
+
+function clamp(n, lo, hi) {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function difficultyWeight(d) {
+  if (d === 'Hard') return 1.8;
+  if (d === 'Medium') return 1.4;
+  return 1.0; // Easy
+}
+
+// returns integer 5–95, capped, never 0 or 100
+function seededMasteryPercent(
+  skillResponses,
+  { priorMean = 0.70, priorStrength = 4 } = {}
+) {
+  let wTotal = 0;
+  let wCorrect = 0;
+
+  for (const r of skillResponses) {
+    if (r.selectedChoiceLabel == null) continue; // ignore unanswered here
+    const w = difficultyWeight(r.difficulty);
+    wTotal += w;
+    if (r.isCorrect) wCorrect += w;
+  }
+
+  // If no answered items for this skill, start at a reasonable baseline
+  if (wTotal === 0) return 50;
+
+  const p = (wCorrect + priorStrength * priorMean) / (wTotal + priorStrength);
+  const pct = Math.round(p * 100);
+
+  // don’t start at 0 or 100
+  return clamp(pct, 5, 95);
+}
+
+/**
+ * Finalize Stage 2:
+ * - marks diagnostic completed
+ * - computes mastery by skill across ALL Math responses
+ * - stores a recommended practice list (weakest skills first)
+ * - seeds userProfile.skillMastery (0–100) + dailySkillId
+ * - marks user as having taken the diagnostic
+ */
+export async function finalizeStage2AndComputeMastery(db, userId, stage2ModuleName) {
+  if (!db || !userId) return null;
+
+  const diagRef = getMathDiagnosticRef(db, userId);
+  const snapshot = await getDoc(diagRef);
+
+  if (!snapshot.exists()) {
+    throw new Error(`Math diagnostic not initialized for user ${userId}`);
+  }
+
+  const data = snapshot.data();
+  const responses = Array.isArray(data.responses) ? data.responses : [];
+
+  // answered math only (blanks ignored for mastery seeding)
+  const answeredMath = responses
+    .filter((r) => r.section === 'Math')
+    .filter((r) => r.selectedChoiceLabel != null);
+
+  const skillStats = computeSkillStats(answeredMath);
+
+  // v1 practice plan: take 6 weakest skills (or fewer)
+  const recommendedSkills = skillStats
+    .filter((s) => s.skillId !== 'UNKNOWN')
+    .slice(0, 6)
+    .map((s) => s.skillId);
+
+  // diagnostic-level mastery map
+  const masteryBySkillId = {};
+  for (const s of skillStats) {
+    masteryBySkillId[s.skillId] = {
+      masteryLevel: s.masteryLevel,
+      accuracy: s.pointsAccuracy,
+      correct: s.correct,
+      total: s.total,
+      updatedAt: new Date(),
+    };
+  }
+
+  // Group ALL math responses by skill (Routing + Stage 2)
+  const allAnsweredMath = responses
+    .filter((r) => r.section === 'Math')
+    .filter((r) => r.selectedChoiceLabel != null);
+
+  const bySkill = new Map();
+  for (const r of allAnsweredMath) {
+    const sid = r.skillId || 'UNKNOWN';
+    if (!bySkill.has(sid)) bySkill.set(sid, []);
+    bySkill.get(sid).push(r);
+  }
+
+  const skillMastery = {};
+  for (const [skillId, skillResponses] of bySkill.entries()) {
+    if (skillId === 'UNKNOWN') continue;
+    skillMastery[skillId] = seededMasteryPercent(skillResponses, {
+      priorMean: 0.70,
+      priorStrength: 4,
+    });
+  }
+
+  // Daily skill = lowest seeded mastery among computed skills
+  const dailySkillId =
+    Object.entries(skillMastery).sort((a, b) => a[1] - b[1])[0]?.[0] || null;
+
+  // 1) Write diagnostic completion
+  await updateDoc(diagRef, {
+    status: 'completed',
+    currentModule: null,
+    currentModuleStartedAt: null,
+    currentModuleDurationSec: null,
+    currentModuleExpiresAt: null,
+    masteryBySkillId,
+    recommendedSkills,
+    skillStats, // ✅ add this
+    summary: {
+      ...(data.summary || {}),
+      stage2: { moduleName: stage2ModuleName, completedAt: new Date() },
+      mastery: { skillCount: skillStats.length, recommendedSkills },
+    },
+  });
+  
+
+  // 2) Write into user profile for Dashboard / OverviewView
+  // 2) Write into user profile for Dashboard / OverviewView
+const userProfileRef = doc(
+  db,
+  'artifacts',
+  APP_ID,
+  'users',
+  userId,
+  'profile',
+  'data'
+);
+
+await setDoc(
+  userProfileRef,
+  {
+    skillMastery, // { [skillId]: percent }
+    dailySkillId, // first skill for Daily 5
+    diagnosticMathCompleted: true,
+    diagnosticMathSummarySeen: false,
+    lastDiagnosticAt: serverTimestamp(),
+  },
+  { merge: true }
+);
+
+  return {
+    skillStats,
+    masteryBySkillId,
+    recommendedSkills,
+    skillMastery,
+    dailySkillId,
+  };
 }

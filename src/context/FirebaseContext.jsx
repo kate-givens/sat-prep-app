@@ -1,20 +1,21 @@
 import React, { useState, useEffect, useMemo, useContext } from 'react';
 import { initializeApp } from 'firebase/app';
-import { 
+import {
   getAuth,
   onAuthStateChanged,
   signOut,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
-  signInWithCustomToken
+  signInWithCustomToken,
 } from 'firebase/auth';
-import { 
-  getFirestore, 
-  doc, 
-  setDoc, 
-  onSnapshot, 
-  updateDoc, 
-  deleteDoc 
+import {
+  getFirestore,
+  doc,
+  setDoc,
+  onSnapshot,
+  updateDoc,
+  deleteDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { ALL_SKILLS, SAT_STRUCTURE } from '../data/satData';
 import { FIREBASE_CONFIG, APP_ID } from '../config/constants';
@@ -32,7 +33,13 @@ export const FirebaseProvider = ({ children }) => {
   const [userProfile, setUserProfile] = useState(null);
 
   // Placeholder for environment variable if used in other environments
-  const initialAuthToken = null; 
+  const initialAuthToken = null;
+
+  // ✅ Single canonical profile doc ref (ONLY /profile/data)
+  const profileDocRef = (uid) => {
+    if (!db || !uid) return null;
+    return doc(db, 'artifacts', APP_ID, 'users', uid, 'profile', 'data');
+  };
 
   useEffect(() => {
     const app = initializeApp(FIREBASE_CONFIG);
@@ -64,53 +71,50 @@ export const FirebaseProvider = ({ children }) => {
   }, []);
 
   useEffect(() => {
-    if (!db || !userId) return;
+    // ✅ guard auth too (we reference auth.currentUser below)
+    if (!db || !auth || !userId) return;
 
-    const userDocRef = doc(
-      db,
-      'artifacts',
-      APP_ID,
-      'users',
-      userId,
-      'profile',
-      'data'
-    );
+    const userDocRef = profileDocRef(userId);
+    if (!userDocRef) return;
 
     const unsubscribe = onSnapshot(userDocRef, (docSnap) => {
       const profile = docSnap.exists() ? docSnap.data() : null;
 
       if (profile) {
         setUserProfile(profile);
-      } else {
-        // Initialize a fresh profile for a new real user
-        const initialMastery = ALL_SKILLS.map((skill) => ({
-          skillId: skill.skillId,
-          masteryLevel: 0,
-        }));
-
-        const initialProfile = {
-          uid: userId,
-          createdAt: new Date(),
-          hasTakenDiagnostic: false,
-          skillMastery: initialMastery.reduce((acc, cur) => {
-            acc[cur.skillId] = cur.masteryLevel;
-            return acc;
-          }, {}),
-          dailyProgress: {
-            date: getFormattedDate(),
-            completed: false,
-            score: 0,
-          },
-        };
-
-        setDoc(userDocRef, initialProfile).catch((e) =>
-          console.error('Error setting initial profile:', e)
-        );
+        return;
       }
+
+      // Initialize a fresh profile for a new real user
+      const initialMastery = ALL_SKILLS.map((skill) => ({
+        skillId: skill.skillId,
+        masteryLevel: 0,
+      }));
+
+      const initialProfile = {
+        uid: userId,
+        email: auth.currentUser?.email || null,
+        firstName: '',
+        createdAt: serverTimestamp(),
+        hasTakenDiagnostic: false,
+        skillMastery: initialMastery.reduce((acc, cur) => {
+          acc[cur.skillId] = cur.masteryLevel;
+          return acc;
+        }, {}),
+        dailyProgress: {
+          date: getFormattedDate(),
+          completed: false,
+          score: 0,
+        },
+      };
+
+      setDoc(userDocRef, initialProfile).catch((e) =>
+        console.error('Error setting initial profile:', e)
+      );
     });
 
     return () => unsubscribe();
-  }, [db, userId]);
+  }, [db, auth, userId]);
 
   const updateMastery = async (skillId, isCorrect, difficulty, timeTaken) => {
     if (!db || !userId || !userProfile) return { delta: 0 };
@@ -149,13 +153,13 @@ export const FirebaseProvider = ({ children }) => {
     }));
 
     try {
-      await updateDoc(
-        doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data'),
-        {
-          [`skillMastery.${skillId}`]: newMastery,
-          lastPracticed: new Date(),
-        }
-      );
+      const ref = profileDocRef(userId);
+      if (!ref) return { delta: 0, isSlow: false };
+
+      await updateDoc(ref, {
+        [`skillMastery.${skillId}`]: newMastery,
+        lastPracticed: new Date(),
+      });
       return { delta, isSlow };
     } catch (e) {
       console.error('Error updating mastery:', e);
@@ -180,13 +184,13 @@ export const FirebaseProvider = ({ children }) => {
     }));
 
     try {
-      await updateDoc(
-        doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data'),
-        {
-          [`skillMastery.${skillId}`]: newMastery,
-          lastPracticed: new Date(),
-        }
-      );
+      const ref = profileDocRef(userId);
+      if (!ref) return { delta: 0, isSlow: false };
+
+      await updateDoc(ref, {
+        [`skillMastery.${skillId}`]: newMastery,
+        lastPracticed: new Date(),
+      });
       return { delta, isSlow };
     } catch (e) {
       console.error('Error updating mastery:', e);
@@ -196,31 +200,38 @@ export const FirebaseProvider = ({ children }) => {
 
   const completeDailyGoal = async (scorePercentage) => {
     if (!db || !userId) return;
+
     if (scorePercentage >= 60) {
-      await updateDoc(
-        doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data'),
-        {
+      try {
+        const ref = profileDocRef(userId);
+        if (!ref) return;
+
+        await updateDoc(ref, {
           dailyProgress: {
             date: getFormattedDate(),
             completed: true,
             score: scorePercentage,
           },
-        }
-      );
+        });
+      } catch (e) {
+        console.error('Error completing daily goal:', e);
+      }
     }
   };
 
   const resetAccount = async () => {
     if (!db || !userId) return;
+
     if (
       window.confirm(
         'Are you sure? This will wipe your progress and start you from zero.'
       )
     ) {
       try {
-        await deleteDoc(
-          doc(db, 'artifacts', APP_ID, 'users', userId, 'profile', 'data')
-        );
+        const ref = profileDocRef(userId);
+        if (!ref) return;
+
+        await deleteDoc(ref);
         setUserProfile(null);
         window.location.reload();
       } catch (e) {
@@ -232,8 +243,28 @@ export const FirebaseProvider = ({ children }) => {
   const loginWithEmail = (email, password) =>
     signInWithEmailAndPassword(auth, email, password);
 
-  const signupWithEmail = (email, password) =>
-    createUserWithEmailAndPassword(auth, email, password);
+  const signupWithEmail = async (email, password, firstName) => {
+    const cred = await createUserWithEmailAndPassword(auth, email, password);
+
+    // ✅ Write profile fields to ONLY /profile/data
+    if (db) {
+      const ref = profileDocRef(cred.user.uid);
+      if (ref) {
+        await setDoc(
+          ref,
+          {
+            uid: cred.user.uid,
+            email: cred.user.email || email,
+            firstName: firstName || '',
+            createdAt: serverTimestamp(),
+          },
+          { merge: true }
+        );
+      }
+    }
+
+    return cred;
+  };
 
   const logout = () => signOut(auth);
 

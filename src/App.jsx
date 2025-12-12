@@ -1,3 +1,4 @@
+// src/App.jsx
 import React from 'react';
 import { FirebaseProvider, useFirebase } from './context/FirebaseContext.jsx';
 import LoginScreen from './pages/LoginScreen.jsx';
@@ -8,7 +9,9 @@ import { BRAND_BLUE } from './config/constants.js';
 const AppRouter = () => {
   const { userProfile, isAuthReady, userId } = useFirebase();
 
-  // Wait for Firebase initialization
+  console.log('AppRouter userProfile:', userProfile);
+
+  // 1) Wait for Firebase initialization
   if (!isAuthReady) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
@@ -27,36 +30,41 @@ const AppRouter = () => {
     );
   }
 
-  // If no logged-in user, show login page
+  // 2) If no logged-in user, show login page
   if (!userId) return <LoginScreen />;
 
-  // If user exists but Firestore hasn't loaded profile yet
+  // 3) If user exists but Firestore hasn't loaded profile yet
   if (!userProfile) return null;
 
-  // 🚀 NEW LOGIC: route brand-new users to diagnostic
-  if (!userProfile.hasTakenDiagnostic) {
-    return <DiagnosticPage />;
-  }
+  // 4) Brand-new users → diagnostic
+  // 4) Math diagnostic gating (RW later)
+const mathDone = !!(userProfile.diagnosticMathCompleted || userProfile.hasTakenDiagnostic);
+const mathSummarySeen = !!(userProfile.diagnosticMathSummarySeen || userProfile.hasTakenDiagnostic);
 
-  // Otherwise, show dashboard
+// Keep user in diagnostic until math diagnostic is done AND they've seen the summary
+if (!mathDone || !mathSummarySeen) {
+  return <DiagnosticPage />;
+}
+
+
+  // 5) Otherwise → practice dashboard
   return <DashboardPage />;
 };
-
 
 const App = () => (
   <div className="antialiased text-gray-900 bg-gray-50 min-h-screen">
     <style>{`
-            @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
-            body { font-family: 'Montserrat', sans-serif; }
-            .animate-fade-in { animation: fadeIn 0.5s ease-out; }
-            .animate-fade-in-up { animation: fadeInUp 0.5s ease-out; }
-            .custom-scrollbar::-webkit-scrollbar { width: 4px; }
-            .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-            .custom-scrollbar::-webkit-scrollbar-thumb { background: #f1f1f1; border-radius: 4px; }
-            .custom-scrollbar:hover::-webkit-scrollbar-thumb { background: #e0e0e0; }
-            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
-            @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
-        `}</style>
+      @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700&display=swap');
+      body { font-family: 'Montserrat', sans-serif; }
+      .animate-fade-in { animation: fadeIn 0.5s ease-out; }
+      .animate-fade-in-up { animation: fadeInUp 0.5s ease-out; }
+      .custom-scrollbar::-webkit-scrollbar { width: 4px; }
+      .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+      .custom-scrollbar::-webkit-scrollbar-thumb { background: #f1f1f1; border-radius: 4px; }
+      .custom-scrollbar:hover::-webkit-scrollbar-thumb { background: #e0e0e0; }
+      @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+      @keyframes fadeInUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    `}</style>
     <FirebaseProvider>
       <AppRouter />
     </FirebaseProvider>

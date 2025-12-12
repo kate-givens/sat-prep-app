@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { BRAND_BLUE } from '../config/constants';
+import { BRAND_BLUE } from '../config/constants.js';
 
 const OverviewView = ({
   dailySkill,
@@ -9,6 +9,7 @@ const OverviewView = ({
   userProfile,
   SKILLS,
   isDailyComplete,
+  logout,
 }) => {
   const [openDomainId, setOpenDomainId] = useState(null); // all collapsed by default
 
@@ -35,7 +36,7 @@ const OverviewView = ({
   const sortedDomains = useMemo(() => {
     return [...domainsWithSkills].sort((a, b) => {
       const masteryA = a.skills.map((s) => skillMastery[s.skillId] || 0);
-      const masteryB = b.skills.map((s) => skillMastery[s.skillId] || 0);
+      const masteryB = b.skills.map((s) => skillMastery[b.skillId] || 0);
 
       const avgA =
         masteryA.length > 0
@@ -70,6 +71,7 @@ const OverviewView = ({
                 : 'bg-gradient-to-br from-[#1e82ff]/10 to-transparent group-hover:scale-110'
             }`}
           ></div>
+
           <div className="p-10 relative z-10">
             <div className="flex justify-between items-start mb-6">
               <span
@@ -81,14 +83,27 @@ const OverviewView = ({
               >
                 {isDailyComplete ? 'Daily Goal Complete!' : 'Daily Priority'}
               </span>
-              {isDailyComplete && <span className="text-4xl">✅</span>}
+
+              <div className="flex flex-col items-end gap-1">
+                {isDailyComplete && <span className="text-2xl">✅</span>}
+                {logout && (
+                  <button
+                    onClick={logout}
+                    className="text-[10px] uppercase tracking-widest text-gray-400 hover:text-red-500"
+                  >
+                    Exit
+                  </button>
+                )}
+              </div>
             </div>
+
             <h2 className="text-3xl font-light text-gray-900 mb-2 leading-tight">
               {dailySkill?.name}
             </h2>
             <p className="text-gray-500 text-sm mb-8">
               {currentDomain?.domainName}
             </p>
+
             <div className="space-y-6 mb-10">
               <div>
                 <div className="flex justify-between text-sm mb-2 font-medium">
@@ -111,6 +126,7 @@ const OverviewView = ({
                 </div>
               </div>
             </div>
+
             <button
               onClick={() => startPractice(dailySkill)}
               className={`w-full py-5 text-white text-lg font-medium rounded-2xl shadow-lg transition-all duration-300 flex items-center justify-center group ${
