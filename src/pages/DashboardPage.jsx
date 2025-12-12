@@ -5,6 +5,7 @@ import { APP_ID } from '../config/constants.js';
 import OverviewView from '../components/OverviewView.jsx';
 import PracticeView from '../components/PracticeView.jsx';
 
+
 const DashboardPage = () => {
   const {
     userProfile,

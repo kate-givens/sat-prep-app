@@ -8,6 +8,7 @@ import { BRAND_BLUE } from './config/constants.js';
 const AppRouter = () => {
   const { userProfile, isAuthReady, userId } = useFirebase();
 
+  // Wait for Firebase initialization
   if (!isAuthReady) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gray-50">
@@ -26,21 +27,21 @@ const AppRouter = () => {
     );
   }
 
+  // If no logged-in user, show login page
   if (!userId) return <LoginScreen />;
-  
-  if (!userProfile) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-50">
-        <p className="text-gray-500 font-light animate-pulse">
-          Initializing User Profile...
-        </p>
-      </div>
-    );
+
+  // If user exists but Firestore hasn't loaded profile yet
+  if (!userProfile) return null;
+
+  // 🚀 NEW LOGIC: route brand-new users to diagnostic
+  if (!userProfile.hasTakenDiagnostic) {
+    return <DiagnosticPage />;
   }
 
+  // Otherwise, show dashboard
   return <DashboardPage />;
-
 };
+
 
 const App = () => (
   <div className="antialiased text-gray-900 bg-gray-50 min-h-screen">
