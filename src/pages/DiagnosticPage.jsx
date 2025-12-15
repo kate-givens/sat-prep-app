@@ -19,6 +19,7 @@ import {
   mathRoutingModuleQuestions,
   mathStage2Modules,
 } from '../data/mathDiagnosticQuestions.js';
+import DesmosDraggable from '../components/DesmosDraggable.jsx';
 
 const MODULE_DUR_SEC = 20 * 60; // 20 minutes per module
 
@@ -246,6 +247,7 @@ const DiagnosticPage = () => {
   const minutes = Math.floor(remainingSeconds / 60);
   const seconds = remainingSeconds % 60;
   const timeLabel = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  const showDesmosCalculator = !!(currentQuestion?.skillId?.startsWith('M_'));
 
   // If the diagnostic is already completed in Firestore and the user hasn't
 // acknowledged the summary yet, show the summary (survives refresh/remount).
@@ -478,6 +480,7 @@ useEffect(() => {
           )}
         </div>
       </div>
+      <DesmosDraggable show={showDesmosCalculator} />
     </div>
   );
 };

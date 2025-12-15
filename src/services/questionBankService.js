@@ -9,6 +9,7 @@ import {
   limit,
   updateDoc,
   orderBy,
+  deleteDoc,
 } from 'firebase/firestore';
 import { APP_ID } from '../config/constants';
 import { generateSATQuestion } from './aiEngine';
@@ -259,42 +260,67 @@ export const fetchQuestionCountsBySkill = async (db, skills = []) => {
   });
 
   return Array.from(countsBySkill.values());
-}; 
-  export const fetchFlaggedQuestions = async (db, limitCount = 20) => {
-    const colRef = collection(
-      db,
-      'artifacts',
-      APP_ID,
-      'public',
-      'data',
-      'questionBank'
-    );
-  
-    const q = query(
-      colRef,
-      where('flagged', '==', true),
-      orderBy('flaggedAt', 'desc'),
-      limit(limitCount)
-    );
-  
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => ({
-      id: d.id,
-      ...d.data(),
-    }));
-  };
-  export const updateQuestionFields = async (db, id, updates) => {
-    const ref = doc(
-      db,
-      'artifacts',
-      APP_ID,
-      'public',
-      'data',
-      'questionBank',
-      id
-    );
-    await updateDoc(ref, {
-      ...updates,
-      updatedAt: new Date(),
-    });
-  };
+};
+
+export const deleteQuestionsBySkill = async (db, skillId) => {
+  if (!db || !skillId) return 0;
+
+  const colRef = collection(
+    db,
+    'artifacts',
+    APP_ID,
+    'public',
+    'data',
+    'questionBank'
+  );
+
+  const q = query(colRef, where('skillId', '==', skillId));
+  const snap = await getDocs(q);
+
+  if (snap.empty) return 0;
+
+  const deletions = snap.docs.map((docSnap) => deleteDoc(docSnap.ref));
+  await Promise.all(deletions);
+
+  return snap.size;
+};
+
+export const fetchFlaggedQuestions = async (db, limitCount = 20) => {
+  const colRef = collection(
+    db,
+    'artifacts',
+    APP_ID,
+    'public',
+    'data',
+    'questionBank'
+  );
+
+  const q = query(
+    colRef,
+    where('flagged', '==', true),
+    orderBy('flaggedAt', 'desc'),
+    limit(limitCount)
+  );
+
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({
+    id: d.id,
+    ...d.data(),
+  }));
+};
+
+export const updateQuestionFields = async (db, id, updates) => {
+  const ref = doc(
+    db,
+    'artifacts',
+    APP_ID,
+    'public',
+    'data',
+    'questionBank',
+    id
+  );
+  await updateDoc(ref, {
+    ...updates,
+    updatedAt: new Date(),
+  });
+};

@@ -7,7 +7,6 @@ const DesmosDraggable = ({ show = false }) => {
   const dragOffset = useRef({ x: 0, y: 0 });
   const containerRef = useRef(null);
 
-  // Initial position (near bottom-right)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const vw = window.innerWidth;
@@ -18,7 +17,6 @@ const DesmosDraggable = ({ show = false }) => {
     });
   }, []);
 
-  // If show becomes false (non-math question), close the calculator
   useEffect(() => {
     if (!show) setIsOpen(false);
   }, [show]);
@@ -60,7 +58,6 @@ const DesmosDraggable = ({ show = false }) => {
 
   return (
     <>
-      {/* Floating toggle button (SAT-style calculator icon) */}
       <button
         type="button"
         onClick={() => setIsOpen((prev) => !prev)}
@@ -78,7 +75,6 @@ const DesmosDraggable = ({ show = false }) => {
             left: `${position.x}px`,
           }}
         >
-          {/* Drag handle / header */}
           <div
             onMouseDown={handleMouseDown}
             className="cursor-move flex items-center justify-between px-3 py-2 bg-gray-800 text-white text-xs font-semibold uppercase tracking-widest"
@@ -96,7 +92,6 @@ const DesmosDraggable = ({ show = false }) => {
             </button>
           </div>
 
-          {/* Desmos iframe */}
           <div className="w-full h-full bg-white">
             <iframe
               title="Desmos Calculator"

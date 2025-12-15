@@ -8,6 +8,7 @@ import {
   fetchFlaggedQuestions,
   updateQuestionFields,
   fetchQuestionCountsBySkill,
+  deleteQuestionsBySkill,
 } from '../services/questionBankService.js';
 
 const AdminPage = ({ setView }) => {
@@ -58,6 +59,9 @@ const AdminPage = ({ setView }) => {
   const [skillCounts, setSkillCounts] = useState([]);
   const [isLoadingCounts, setIsLoadingCounts] = useState(false);
   const [countsStatus, setCountsStatus] = useState('');
+  const [deleteSkillId, setDeleteSkillId] = useState(firstSkillId);
+  const [deleteStatus, setDeleteStatus] = useState('');
+  const [isDeletingSkill, setIsDeletingSkill] = useState(false);
 
   // Manual import
   const [importSkillId, setImportSkillId] = useState(firstSkillId);
@@ -92,6 +96,7 @@ const AdminPage = ({ setView }) => {
     setSelectedSkill((prev) => prev || firstId);
     setReviewSkillId((prev) => prev || firstId);
     setImportSkillId((prev) => prev || firstId);
+    setDeleteSkillId((prev) => prev || firstId);
   }, [SKILLS]);
 
   // ---------- Overview / counts ----------
@@ -125,6 +130,38 @@ const AdminPage = ({ setView }) => {
       loadSkillCounts();
     }
   }, [db, SKILLS]);
+
+  const handleClearSkillQuestions = async () => {
+    if (!db || !deleteSkillId) return;
+    const skillMeta =
+      SKILLS.find((skill) => skill.skillId === deleteSkillId) || {};
+    const skillLabel = skillMeta.name
+      ? `${skillMeta.name} (${skillMeta.skillId})`
+      : deleteSkillId;
+
+    const confirmed = window.confirm(
+      `Delete ALL question bank entries for ${skillLabel}? This cannot be undone.`
+    );
+    if (!confirmed) return;
+
+    setIsDeletingSkill(true);
+    setDeleteStatus('Deleting…');
+    try {
+      const removedCount = await deleteQuestionsBySkill(db, deleteSkillId);
+      setDeleteStatus(
+        removedCount
+          ? `Deleted ${removedCount} question${removedCount === 1 ? '' : 's'}.`
+          : 'No questions found for that skill.'
+      );
+      await loadSkillCounts();
+    } catch (err) {
+      console.error(err);
+      setDeleteStatus('Error deleting questions. Check console.');
+    } finally {
+      setIsDeletingSkill(false);
+      setTimeout(() => setDeleteStatus(''), 5000);
+    }
+  };
 
   // ---------- Seed patterns ----------
 
@@ -371,10 +408,10 @@ const AdminPage = ({ setView }) => {
     </button>
   );
 
-  const SkillSelect = ({ value, onChange }) => (
+  const SkillSelect = ({ value, onChange, label = 'Skill Target' }) => (
     <div className="space-y-1.5">
       <label className="text-xs font-bold text-gray-500 uppercase tracking-wider">
-        Skill Target
+        {label}
       </label>
       <div className="relative">
         <select
@@ -572,6 +609,32 @@ const AdminPage = ({ setView }) => {
                 </span>
                 .
               </p>
+            </div>
+            <div className="bg-white rounded-xl shadow-sm border border-red-200 p-6">
+              <div className="flex flex-col gap-1 mb-4">
+                <h2 className="text-lg font-bold text-red-600">Danger Zone</h2>
+                <p className="text-sm text-gray-500">
+                  Permanently delete every question tied to a skill. This cannot be undone.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-[2fr_auto] gap-4 items-end">
+                <SkillSelect
+                  label="Skill to Wipe"
+                  value={deleteSkillId}
+                  onChange={(e) => setDeleteSkillId(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={handleClearSkillQuestions}
+                  disabled={isDeletingSkill}
+                  className="w-full px-6 py-3 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-lg shadow-md disabled:opacity-60 disabled:cursor-not-allowed"
+                >
+                  {isDeletingSkill ? 'Deleting…' : 'Delete All Questions'}
+                </button>
+              </div>
+              {deleteStatus && (
+                <p className="text-xs text-gray-500 mt-3">{deleteStatus}</p>
+              )}
             </div>
           </div>
         )}
