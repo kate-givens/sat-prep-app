@@ -19,13 +19,27 @@ const MathText = ({ text }) => {
   useEffect(() => {
     if (!containerRef.current || !text) return;
 
-    const parts = text.split(/(\$[^$]+\$)/g);
+    const escapeCurrency = (input) =>
+      input.replace(/\$(\d[\d,]*(?:\.\d+)?)/g, (match, amount, offset, full) => {
+        const nextChar = full[offset + match.length] || '';
+        if (nextChar === '$') return match; // part of $...$ block
+        if (/[A-Za-z]/.test(nextChar)) return match; // likely math, e.g. $2x
+        return `&dollar;${amount}`;
+      });
+
+    const sanitized = escapeCurrency(text);
+    const parts = sanitized.split(/(\$[^$]+\$)/g);
 
     const renderedHtml = parts
       .map((part) => {
         if (part.startsWith('$') && part.endsWith('$')) {
+          const inner = part.slice(1, -1).trim();
+          const looksLikeCurrency = /^[\d\s.,]+$/.test(inner);
+          if (looksLikeCurrency) {
+            return part; // treat as literal currency, not LaTeX
+          }
           try {
-            const math = part.slice(1, -1);
+            const math = inner;
             return katex.renderToString(math, { throwOnError: false });
           } catch (e) {
             return part;
